@@ -5,7 +5,7 @@ A mobile-friendly, zero-dependency browser implementation of the classic island-
 Play it by serving the repository root as a static site (no build step):
 
 ```sh
-npm start          # python3 -m http.server 8080
+npm start          # zero-dependency Node static server on port 8080
 # then open http://localhost:8080
 ```
 
