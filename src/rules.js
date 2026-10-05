@@ -8,6 +8,11 @@ export function totalResources(res) {
   return RESOURCES.reduce((s, r) => s + (res[r] || 0), 0);
 }
 
+/** Number of resource cards a player holds. Works on redacted states, where opponents only expose a count. */
+export function handSize(player) {
+  return typeof player.handCount === 'number' ? player.handCount : totalResources(player.resources);
+}
+
 export function canAfford(resources, cost) {
   return Object.entries(cost).every(([r, n]) => (resources[r] || 0) >= n);
 }

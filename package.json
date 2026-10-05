@@ -5,7 +5,13 @@
   "type": "module",
   "scripts": {
     "test": "node --test \"test/**/*.test.js\"",
-    "start": "node scripts/serve.js 8080"
+    "start": "node server/index.js"
   },
-  "license": "MIT"
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.22.0"
+  }
 }

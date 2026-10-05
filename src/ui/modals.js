@@ -1,7 +1,7 @@
 import { h, clear } from './dom.js';
 import { RESOURCES, RESOURCE_ICON, RESOURCE_LABEL, DEV_CARD_LABEL, DEV_CARD_TEXT, COSTS } from '../constants.js';
 import { tradeRatio, countVictoryPoints, playableDevCards } from '../game.js';
-import { emptyResources, totalResources } from '../rules.js';
+import { emptyResources, totalResources, handSize } from '../rules.js';
 
 let modalRoot = null;
 
@@ -10,13 +10,23 @@ export function initModals(root) {
 }
 
 export function closeModal() {
-  if (modalRoot) clear(modalRoot);
+  if (!modalRoot) return;
+  clear(modalRoot);
   modalRoot.classList.remove('open');
+  delete modalRoot.dataset.tag;
 }
 
-/** Show a modal. opts: {title, body: Node|Node[], actions: [{label, onClick, primary, disabled}], dismissible, className} */
+/** Tag of the open modal ('' when it has none), or null when no modal is open. */
+export function currentModalTag() {
+  if (!modalRoot || !modalRoot.classList.contains('open')) return null;
+  return modalRoot.dataset.tag || '';
+}
+
+/** Show a modal. opts: {title, body: Node|Node[], actions: [{label, onClick, primary, disabled}], dismissible, className, tag} */
 export function showModal(opts) {
   clear(modalRoot);
+  if (opts.tag) modalRoot.dataset.tag = opts.tag;
+  else delete modalRoot.dataset.tag;
   const card = h('div', { class: `modal-card ${opts.className || ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': opts.title || 'Dialog' });
   if (opts.title) card.append(h('h2', { class: 'modal-title' }, opts.title));
   const body = h('div', { class: 'modal-body' }, opts.body);
@@ -94,6 +104,7 @@ export function discardModal(state, pid, count, dispatch) {
     title: `${p.name}: discard ${count} cards`,
     body: [h('p', { class: 'muted' }, 'A 7 was rolled. You hold more than ' + state.options.discardLimit + ' cards, so you must discard half of them.'), stepper.el, h('div', { class: 'modal-actions' }, confirmBtn)],
     dismissible: false,
+    tag: 'discard',
   });
 }
 
@@ -105,10 +116,11 @@ export function stealModal(state, candidates, dispatch) {
       { class: 'choice-list' },
       candidates.map((pid) => {
         const p = state.players[pid];
-        return h('button', { class: 'btn choice', onclick: () => dispatch({ type: 'steal', victim: pid }) }, h('span', { class: 'dot', style: { background: colorHex(state, pid) } }), `${p.name} (${totalResources(p.resources)} cards)`);
+        return h('button', { class: 'btn choice', onclick: () => dispatch({ type: 'steal', victim: pid }) }, h('span', { class: 'dot', style: { background: colorHex(state, pid) } }), `${p.name} (${handSize(p)} cards)`);
       }),
     ),
     dismissible: false,
+    tag: 'steal',
   });
 }
 
@@ -238,7 +250,7 @@ export function tradeModal(state, pid, dispatch) {
   render();
 }
 
-export function gameOverModal(state, onNewGame, onReview) {
+export function gameOverModal(state, onNewGame, onReview, newGameLabel = 'New game') {
   const ranking = state.players
     .map((p) => ({ p, vp: countVictoryPoints(state, p.id) }))
     .sort((a, b) => b.vp - a.vp);
@@ -253,9 +265,10 @@ export function gameOverModal(state, onNewGame, onReview) {
     ),
     actions: [
       { label: 'Review board', onClick: onReview },
-      { label: 'New game', onClick: onNewGame, primary: true },
+      { label: newGameLabel, onClick: onNewGame, primary: true },
     ],
     dismissible: false,
+    tag: 'gameover',
   });
 }
 

@@ -29,6 +29,20 @@ function fail(msg) {
   throw new GameError(msg);
 }
 
+/** Normalize an untrusted resource map to non-negative integer counts for the five resources only. */
+function cleanResources(obj) {
+  const out = emptyResources();
+  if (obj === null || obj === undefined) return out;
+  if (typeof obj !== 'object' || Array.isArray(obj)) fail('Invalid resources.');
+  for (const r of RESOURCES) {
+    const n = Object.prototype.hasOwnProperty.call(obj, r) ? obj[r] : 0;
+    if (n === undefined || n === null || n === 0) continue;
+    if (!Number.isInteger(n) || n < 0 || n > 99) fail('Invalid resource amount.');
+    out[r] = n;
+  }
+  return out;
+}
+
 function clone(state) {
   return structuredClone(state);
 }
@@ -429,11 +443,12 @@ const handlers = {
     checkVictory(state);
   },
 
-  discard(state, { player, resources }) {
+  discard(state, { player, resources: rawResources }) {
     const p = state.pending;
     if (!p || p.type !== 'discard') fail('No discard pending.');
     const entry = p.players.find((d) => d.player === player);
     if (!entry) fail('You do not need to discard.');
+    const resources = cleanResources(rawResources);
     const total = totalResources(resources);
     if (total !== entry.count) fail(`You must discard exactly ${entry.count} cards.`);
     const pl = state.players[player];
@@ -563,8 +578,8 @@ const handlers = {
     if (state.phase !== 'main' || !state.turn.rolled || state.pending) fail('Cannot trade now.');
     const pid = state.turn.player;
     const p = state.players[pid];
-    const o = { ...emptyResources(), ...offer };
-    const q = { ...emptyResources(), ...request };
+    const o = cleanResources(offer);
+    const q = cleanResources(request);
     if (totalResources(o) === 0 || totalResources(q) === 0) fail('Both sides of a trade must include at least one card.');
     for (const r of RESOURCES) {
       if (o[r] < 0 || q[r] < 0) fail('Invalid trade.');
@@ -580,7 +595,7 @@ const handlers = {
   respondTrade(state, { player, accept }) {
     const p = state.pending;
     if (!p || p.type !== 'trade') fail('No trade pending.');
-    if (!(player in p.responses)) fail('You are not part of this trade.');
+    if (!Number.isInteger(player) || !Object.prototype.hasOwnProperty.call(p.responses, player)) fail('You are not part of this trade.');
     if (accept) {
       const pl = state.players[player];
       for (const r of RESOURCES) if (pl.resources[r] < p.request[r]) fail('You do not have the requested resources.');
@@ -637,8 +652,10 @@ const handlers = {
  * Apply an action and return the new state. Throws GameError on illegal actions.
  */
 export function act(state, action) {
+  if (!action || typeof action.type !== 'string' || !Object.prototype.hasOwnProperty.call(handlers, action.type)) {
+    throw new GameError(`Unknown action ${action && action.type}`);
+  }
   const h = handlers[action.type];
-  if (!h) throw new GameError(`Unknown action ${action.type}`);
   const next = clone(state);
   next.lastEvent = null;
   h(next, action);
