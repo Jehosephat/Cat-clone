@@ -1,0 +1,11 @@
+{
+  "name": "cat-clone",
+  "version": "1.0.0",
+  "description": "A web-based, mobile-friendly clone of the Catan board game (base game rules).",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "start": "python3 -m http.server 8080"
+  },
+  "license": "MIT"
+}
