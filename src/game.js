@@ -182,10 +182,6 @@ export function visibleVictoryPoints(state, playerId) {
   return countVictoryPoints(state, playerId, { includeHidden: false });
 }
 
-export function publicState(state) {
-  return state;
-}
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -614,6 +610,15 @@ const handlers = {
     if (!p || p.type !== 'trade') fail('No trade pending.');
     log(state, `${pname(state, p.from)} withdraws the trade offer.`, p.from);
     state.pending = null;
+  },
+
+  skipRoadBuilding(state) {
+    const p = state.pending;
+    if (!p || p.type !== 'roadBuilding') fail('No free roads pending.');
+    if (state.turn.player === undefined) fail('Not your turn.');
+    log(state, `${pname(state, state.turn.player)} forgoes the remaining free road${p.remaining > 1 ? 's' : ''}.`, state.turn.player);
+    state.pending = null;
+    checkVictory(state);
   },
 
   endTurn(state) {

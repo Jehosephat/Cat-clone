@@ -158,7 +158,7 @@ export function harborEdgeIndices() {
   return idx;
 }
 
-function spiralOrder(radius, startCorner, rng) {
+function spiralOrder(radius, startCorner) {
   // Outer ring starting at a given corner index (0..5) rotated, then inward.
   const order = [];
   for (let rad = radius; rad >= 1; rad--) {
@@ -167,7 +167,6 @@ function spiralOrder(radius, startCorner, rng) {
     for (let i = 0; i < ringHexes.length; i++) order.push(ringHexes[(i + offset) % ringHexes.length]);
   }
   order.push({ q: 0, r: 0 });
-  void rng;
   return order;
 }
 
@@ -217,7 +216,7 @@ export function generateBoard(options, rng) {
       const tiles = [];
       for (const [t, n] of Object.entries(TERRAIN_COUNTS)) for (let i = 0; i < n; i++) tiles.push(t);
       const shuffled = rng.shuffle(tiles);
-      const order = spiralOrder(2, rng.int(6), rng);
+      const order = spiralOrder(2, rng.int(6));
       let numIdx = 0;
       for (let i = 0; i < order.length; i++) {
         const h = hexes[topo.coordIndex[`${order[i].q},${order[i].r}`]];

@@ -350,3 +350,14 @@ test('friendly robber avoids players with 2 or fewer points', () => {
   const weakHex = s.board.hexes.find((h) => h.id !== s.board.robberHex && h.vertices.some((k) => s.board.vertices[k].building && s.board.vertices[k].building.player !== 0));
   assert.throws(() => act(s, { type: 'moveRobber', hex: weakHex.id }), GameError);
 });
+
+test('road building can be skipped, and only pending road building accepts it', () => {
+  let s = finishedSetup();
+  assert.throws(() => act(s, { type: 'skipRoadBuilding' }), GameError);
+  s.players[0].devCards = [{ id: 'rb', type: 'roadBuilding', boughtTurn: 0 }];
+  s = act(s, { type: 'playDevCard', card: 'rb' });
+  assert.equal(s.pending.type, 'roadBuilding');
+  s = act(s, { type: 'skipRoadBuilding' });
+  assert.equal(s.pending, null);
+  assert.equal(s.turn.devPlayed, true);
+});
