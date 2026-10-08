@@ -100,6 +100,7 @@ export function newGame(userOptions = {}) {
   const bank = {};
   for (const r of RESOURCES) bank[r] = BANK_PER_RESOURCE;
 
+  const turnOrder = validTurnOrder(options.turnOrder, players.length);
   const state = {
     version: 1,
     options,
@@ -110,8 +111,9 @@ export function newGame(userOptions = {}) {
     bank,
     devDeck,
     phase: 'setup',
-    setup: { round: 1, step: 'settlement', lastVertex: null },
-    turn: { player: 0, number: 0, rolled: false, dice: null, devPlayed: false },
+    turnOrder,
+    setup: { round: 1, step: 'settlement', lastVertex: null, index: 0 },
+    turn: { player: turnOrder[0], number: 0, rolled: false, dice: null, devPlayed: false },
     pending: null,
     longestRoad: { player: null, length: 0 },
     largestArmy: { player: null, size: 0 },
@@ -121,6 +123,28 @@ export function newGame(userOptions = {}) {
   };
   log(state, 'Game started. Place your first settlement and road.');
   return state;
+}
+
+/** A permutation of 0..n-1 giving the seating/turn order, or the identity when absent or invalid. */
+function validTurnOrder(order, n) {
+  const identity = Array.from({ length: n }, (_, i) => i);
+  if (!Array.isArray(order) || order.length !== n) return identity;
+  const seen = new Set();
+  for (const pid of order) {
+    if (!Number.isInteger(pid) || pid < 0 || pid >= n || seen.has(pid)) return identity;
+    seen.add(pid);
+  }
+  return order.slice();
+}
+
+/** Turn order of a state (older saved games have none and use seat order). */
+export function turnOrderOf(state) {
+  return state.turnOrder || state.players.map((p) => p.id);
+}
+
+export function nextPlayer(state, pid) {
+  const order = turnOrderOf(state);
+  return order[(order.indexOf(pid) + 1) % order.length];
 }
 
 // ---------------------------------------------------------------------------
@@ -311,19 +335,22 @@ function startRobberMove(state) {
 }
 
 function nextSetupTurn(state) {
-  const n = state.players.length;
+  const order = turnOrderOf(state);
+  const n = order.length;
   const s = state.setup;
+  if (s.index === undefined) s.index = order.indexOf(state.turn.player);
   if (s.round === 1) {
-    if (state.turn.player < n - 1) state.turn.player += 1;
+    if (s.index < n - 1) s.index += 1;
     else s.round = 2; // same player goes again
-  } else if (state.turn.player > 0) state.turn.player -= 1;
+  } else if (s.index > 0) s.index -= 1;
   else {
     // Setup finished.
     state.phase = 'main';
-    state.turn = { player: 0, number: 1, rolled: false, dice: null, devPlayed: false };
-    log(state, `Setup complete. ${pname(state, 0)} begins.`, 0);
+    state.turn = { player: order[0], number: 1, rolled: false, dice: null, devPlayed: false };
+    log(state, `Setup complete. ${pname(state, order[0])} begins.`, order[0]);
     return;
   }
+  state.turn.player = order[s.index];
   s.step = 'settlement';
   s.lastVertex = null;
 }
@@ -641,7 +668,7 @@ const handlers = {
     if (!state.turn.rolled) fail('You must roll the dice first.');
     if (state.pending) fail('Finish the current action first.');
     const prev = state.turn.player;
-    const next = (prev + 1) % state.players.length;
+    const next = nextPlayer(state, prev);
     state.turn = { player: next, number: state.turn.number + 1, rolled: false, dice: null, devPlayed: false };
     log(state, `${pname(state, next)}'s turn.`, next);
     checkVictory(state); // a player may already have reached the target on another's turn

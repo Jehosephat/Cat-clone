@@ -34,6 +34,7 @@ Notes:
 **Rules (base game)**
 - 3 or 4 players, any mix of humans and bots
 - Variable setup (shuffled terrain, rulebook number spiral, shuffled harbors) or the rulebook beginner layout
+- Roll-off for the first player: everyone rolls a die in the lobby, highest goes first and play follows the dice; ties re-roll
 - Snake-order setup placement; the second settlement yields its starting resources
 - Dice production, cities producing double, robber blocking a hex
 - Bank shortage rule: if the bank cannot pay everyone for a resource, nobody receives it
@@ -65,6 +66,7 @@ src/constants.js    costs, card counts, layouts, labels
 src/board.js        hex geometry, topology (vertices/edges), board generation, harbors
 src/rules.js        placement validity, longest road, victory points, trade ratios
 src/game.js         game state and all actions (pure, serializable state)
+src/rolloff.js      the opening die roll that decides the turn order
 src/ai.js           bot decision making
 src/ui/app.js       screens: home, lobby, game; local and online modes
 src/ui/net.js       WebSocket client with automatic reconnect

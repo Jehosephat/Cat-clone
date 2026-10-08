@@ -361,3 +361,48 @@ test('road building can be skipped, and only pending road building accepts it', 
   assert.equal(s.pending, null);
   assert.equal(s.turn.devPlayed, true);
 });
+
+test('a custom turn order drives setup (snake) and the turn rotation', () => {
+  let s = newGame({ playerCount: 4, seed: 11, turnOrder: [2, 0, 3, 1] });
+  assert.equal(s.turn.player, 2);
+  const seen = [];
+  while (s.phase === 'setup') {
+    const pid = s.turn.player;
+    seen.push(pid);
+    const v = validSettlementVertices(s, pid, { setup: true })[0];
+    s = act(s, { type: 'placeSettlement', vertex: v });
+    s = act(s, { type: 'placeRoad', edge: validRoadEdges(s, pid, { fromVertex: v })[0] });
+  }
+  assert.deepEqual(seen, [2, 0, 3, 1, 1, 3, 0, 2]);
+  assert.equal(s.turn.player, 2);
+  s = rollExactly(s, 3);
+  s = act(s, { type: 'endTurn' });
+  assert.equal(s.turn.player, 0);
+  s = rollExactly(s, 3);
+  s = act(s, { type: 'endTurn' });
+  assert.equal(s.turn.player, 3);
+  s = rollExactly(s, 3);
+  s = act(s, { type: 'endTurn' });
+  assert.equal(s.turn.player, 1);
+  s = rollExactly(s, 3);
+  s = act(s, { type: 'endTurn' });
+  assert.equal(s.turn.player, 2);
+  // Invalid orders fall back to seat order.
+  assert.deepEqual(newGame({ playerCount: 3, seed: 1, turnOrder: [0, 0, 1] }).turnOrder, [0, 1, 2]);
+  assert.deepEqual(newGame({ playerCount: 3, seed: 1, turnOrder: [1, 2] }).turnOrder, [0, 1, 2]);
+});
+
+test('saved games without a turn order still advance through setup', () => {
+  let s = newGame({ playerCount: 3, seed: 5 });
+  delete s.turnOrder;
+  delete s.setup.index;
+  const seen = [];
+  while (s.phase === 'setup') {
+    const pid = s.turn.player;
+    seen.push(pid);
+    const v = validSettlementVertices(s, pid, { setup: true })[0];
+    s = act(s, { type: 'placeSettlement', vertex: v });
+    s = act(s, { type: 'placeRoad', edge: validRoadEdges(s, pid, { fromVertex: v })[0] });
+  }
+  assert.deepEqual(seen, [0, 1, 2, 2, 1, 0]);
+});

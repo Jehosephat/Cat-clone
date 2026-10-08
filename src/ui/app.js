@@ -32,8 +32,11 @@ import {
   countVictoryPoints,
   visibleVictoryPoints,
   piecesLeft,
+  turnOrderOf,
 } from '../game.js';
 import { botAction } from '../ai.js';
+import { createRollOff, addRoll, pendingRollers, isComplete, rollOrder, describeRollOff } from '../rolloff.js';
+import { createRng } from '../rng.js';
 import { RESOURCES, RESOURCE_ICON, RESOURCE_LABEL, PLAYER_COLORS, DEFAULT_OPTIONS, COSTS, DEV_CARD_LABEL } from '../constants.js';
 import { longestRoadLength, handSize } from '../rules.js';
 import { createConnection, loadSession, saveSession } from './net.js';
@@ -311,8 +314,8 @@ function handleRoom(msg) {
   const prevRoom = online.room;
   online.room = msg.room;
   online.wantRejoin = false;
-  if (msg.room.phase === 'lobby') {
-    if (!prevRoom || prevRoom.phase !== 'lobby') {
+  if (msg.room.phase === 'lobby' || msg.room.phase === 'rolloff') {
+    if (!prevRoom || prevRoom.phase !== msg.room.phase) {
       closeModal();
       state = null;
       ui.reviewing = false;
@@ -322,7 +325,7 @@ function handleRoom(msg) {
     render();
     return;
   }
-  if (prevRoom && prevRoom.phase === 'lobby') {
+  if (prevRoom && prevRoom.phase !== 'game') {
     state = null; // a new game is starting
     ui.reviewing = false;
   }
@@ -657,19 +660,146 @@ function renderLocalSetup() {
   return h('div', { class: 'setup-screen' }, form);
 }
 
+let localRollOff = null;
+
+/** Local games start with the roll-off for the first player; the board appears once the order is settled. */
 function startLocal(settings) {
   storageSet(SETTINGS_KEY, JSON.stringify(settings));
   const options = { ...settings, players: settings.players.slice(0, settings.playerCount).map((p) => ({ ...p, name: p.name.trim() || 'Player' })) };
-  mode = 'local';
+  mode = null;
   state = null;
+  ui = { mode: null, viewer: null, botToken: ui.botToken + 1, reviewing: false, screen: 'rolloff' };
+  const seeded = options.seed !== null && options.seed !== undefined;
+  localRollOff = { options, rolls: createRollOff(options.players.length), rng: seeded ? createRng((options.seed ^ 0x5bd1e995) >>> 0) : null };
+  render();
+  scheduleLocalRollOffBots();
+}
+
+function localDie() {
+  return localRollOff.rng ? 1 + localRollOff.rng.int(6) : 1 + Math.floor(Math.random() * 6);
+}
+
+function localRoll(pid) {
+  if (!localRollOff) return;
+  try {
+    localRollOff.rolls = addRoll(localRollOff.rolls, pid, localDie());
+  } catch (e) {
+    toast(e.message);
+    return;
+  }
+  if (isComplete(localRollOff.rolls)) {
+    beginLocal(localRollOff.options, localRollOff.rolls);
+    return;
+  }
+  render();
+  scheduleLocalRollOffBots();
+}
+
+function scheduleLocalRollOffBots() {
+  if (!localRollOff) return;
+  const { options, rolls } = localRollOff;
+  const bot = pendingRollers(rolls).find((pid) => options.players[pid].isBot);
+  if (bot === undefined) return;
+  const token = ++ui.botToken;
+  setTimeout(() => {
+    if (token !== ui.botToken || !localRollOff || ui.screen !== 'rolloff') return;
+    localRoll(bot);
+  }, 600);
+}
+
+function cancelLocalRollOff() {
+  localRollOff = null;
+  ui.botToken++;
+  ui.screen = 'local';
+  render();
+}
+
+function beginLocal(options, rolls) {
+  const order = rollOrder(rolls);
+  localRollOff = null;
+  mode = 'local';
   ui = { mode: null, viewer: null, botToken: ui.botToken + 1, reviewing: false, screen: 'game' };
-  state = newGame(options);
+  state = newGame({ ...options, turnOrder: order });
+  state.log.unshift({ turn: 0, player: order[0], text: describeRollOff(options.players.map((p) => p.name), rolls) });
   const firstHuman = state.players.find((p) => !p.isBot);
   ui.viewer = firstHuman ? firstHuman.id : null;
   if (state.options.passDevice && humans().length >= 2) ui.viewer = null; // force the first hand-off screen
   save();
   render();
   scheduleBots();
+}
+
+// ---------------------------------------------------------------------------
+// Roll-off screen (shared by the online lobby and local games)
+// ---------------------------------------------------------------------------
+
+/**
+ * @param view {players: [{name, color, isBot}], rolls, canRoll(pid), onRoll(pid), footer: Node[], note?: string}
+ */
+function renderRollOffScreen(view) {
+  const { players, rolls } = view;
+  const pending = pendingRollers(rolls);
+  const rerolling = pending.length > 0 && pending.every((pid) => rolls[pid].length > 0);
+  const form = h('div', { class: 'setup-card' });
+  form.append(
+    h('h1', { class: 'title small-title' }, '🎲 Roll for first player'),
+    h('p', { class: 'subtitle' }, 'Everyone rolls one die. The highest roll goes first and play continues in order of the dice. Ties roll again.'),
+  );
+  if (view.note) form.append(h('div', { class: 'conn-inline' }, view.note));
+  const list = h('div', { class: 'player-list' });
+  players.forEach((p, pid) => {
+    const color = PLAYER_COLORS.find((c) => c.id === p.color);
+    const isPending = pending.includes(pid);
+    const dice = h('span', { class: 'dice-row', 'aria-label': rolls[pid].length ? `Rolled ${rolls[pid].join(' then ')}` : 'Not rolled yet' },
+      rolls[pid].map((v, i) => h('span', { class: `die-face ${i === rolls[pid].length - 1 ? 'latest' : 'old'}` }, DICE[v - 1])),
+      rolls[pid].length === 0 ? h('span', { class: 'die-face empty' }, '🎲') : null,
+    );
+    let action;
+    if (isPending && view.canRoll(pid)) action = h('button', { class: 'btn btn-primary', onclick: () => view.onRoll(pid) }, rolls[pid].length ? 'Roll again' : '🎲 Roll');
+    else if (isPending) action = h('span', { class: 'muted small' }, p.isBot ? 'rolling…' : rolls[pid].length ? 'tied, rolls again' : 'waiting to roll');
+    else action = h('span', { class: 'ok' }, rolls[pid].length ? '✓' : '');
+    list.append(
+      h('div', { class: `player-row rolloff-row ${isPending ? 'pending' : ''}` },
+        h('span', { class: 'dot big', style: { background: color ? color.hex : '#999' } }),
+        h('span', { class: 'seat-name' }, p.name, p.isBot ? h('span', { class: 'pill' }, '🤖') : null),
+        dice,
+        h('span', { class: 'rolloff-action' }, action),
+      ),
+    );
+  });
+  form.append(list);
+  if (rerolling) form.append(h('p', { class: 'muted small' }, 'Tie! The tied players roll again against each other.'));
+  else form.append(h('p', { class: 'muted small' }, 'The board appears as soon as every die has been rolled.'));
+  form.append(h('div', { class: 'setup-actions' }, view.footer));
+  return h('div', { class: 'setup-screen' }, form);
+}
+
+function renderOnlineRollOff() {
+  const room = online.room;
+  const me = room.you;
+  const isHost = room.host === me;
+  return renderRollOffScreen({
+    players: room.seats,
+    rolls: room.rolloff.rolls,
+    canRoll: (pid) => pid === me && online.status === 'open',
+    onRoll: () => send({ t: 'rollDie' }),
+    note: online.status !== 'open' ? 'Reconnecting…' : null,
+    footer: [
+      isHost ? h('button', { class: 'btn', onclick: () => send({ t: 'cancelRollOff' }) }, '← Back to lobby') : h('div', { class: 'waiting' }, 'Waiting for everyone to roll…'),
+      h('button', { class: 'btn', onclick: () => leaveOnline() }, 'Leave'),
+    ],
+  });
+}
+
+function renderLocalRollOff() {
+  const { options, rolls } = localRollOff;
+  return renderRollOffScreen({
+    players: options.players,
+    rolls,
+    canRoll: (pid) => !options.players[pid].isBot,
+    onRoll: localRoll,
+    footer: [h('button', { class: 'btn', onclick: cancelLocalRollOff }, '← Back')],
+  });
 }
 
 function resumeLocal(saved) {
@@ -690,11 +820,13 @@ function render() {
     if (isOnline()) {
       if (!online.room) app.append(renderConnecting());
       else if (online.room.phase === 'lobby') app.append(renderLobby());
+      else if (online.room.phase === 'rolloff' && online.room.rolloff) app.append(renderOnlineRollOff());
       else if (state) renderGame();
       else app.append(renderConnecting());
       return;
     }
     if (mode === 'local' && state) renderGame();
+    else if (ui.screen === 'rolloff' && localRollOff) app.append(renderLocalRollOff());
     else if (ui.screen === 'local') app.append(renderLocalSetup());
     else app.append(renderHome());
   });
@@ -716,7 +848,8 @@ function renderPlayersBar() {
   const actors = new Set(actingPlayers(state));
   const owner = handOwner();
   const seats = isOnline() ? online.room.seats : null;
-  for (const p of state.players) {
+  for (const pid of turnOrderOf(state)) {
+    const p = state.players[pid];
     const vp = visibleVictoryPoints(state, p.id);
     const showHidden = state.phase === 'ended' || (isOnline() ? p.id === mySeat() : (!state.options.passDevice && !p.isBot) || (p.id === owner && !p.isBot));
     const total = countVictoryPoints(state, p.id);

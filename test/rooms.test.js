@@ -5,6 +5,7 @@ import { redactFor } from '../server/redact.js';
 import { validSettlementVertices, actingPlayers } from '../src/game.js';
 import { botAction } from '../src/ai.js';
 import { totalResources } from '../src/rules.js';
+import { pendingRollers } from '../src/rolloff.js';
 
 function fakeClient() {
   return {
@@ -23,12 +24,29 @@ function fakeClient() {
 
 function manager() {
   const timers = [];
-  const rm = new RoomManager({ schedule: (fn) => (timers.push(fn), fn), cancel: (fn) => timers.splice(timers.indexOf(fn), 1), botDelay: 0 });
+  // Dice for the roll-off default to 6 - seat, so seat order is turn order unless a test overrides `rm.roll`.
+  const rm = new RoomManager({ schedule: (fn) => (timers.push(fn), fn), cancel: (fn) => timers.splice(timers.indexOf(fn), 1), botDelay: 0, roll: (idx) => 6 - idx });
   rm.runTimers = (limit = 100000) => {
     let n = 0;
     while (timers.length && n++ < limit) timers.shift()();
   };
   return rm;
+}
+
+/** Send 'start' and then roll for every human until the game begins (bots roll on timers). */
+function startGame(rm, clients) {
+  const host = clients[0];
+  rm.handle(host, { t: 'start' });
+  let guard = 0;
+  while (host.room && host.room.phase === 'rolloff' && guard++ < 1000) {
+    rm.runTimers(10);
+    const pending = host.room.rolloff ? pendingRollers(host.room.rolloff) : [];
+    for (const c of clients) {
+      if (!host.room || host.room.phase !== 'rolloff') break;
+      const idx = host.room.seats.indexOf(c.seat);
+      if (pending.includes(idx)) rm.handle(c, { t: 'rollDie' });
+    }
+  }
 }
 
 function lobbyWith(rm, humans = 2, bots = 1) {
@@ -81,7 +99,7 @@ test('create, join, lobby management and start', () => {
   rm.handle(host, { t: 'start' });
   assert.match(host.last('error').message, /at least 3/);
   rm.handle(host, { t: 'addBot' });
-  rm.handle(host, { t: 'start' });
+  startGame(rm, clients);
   const msg = guest.last('room');
   assert.equal(msg.room.phase, 'game');
   assert.equal(msg.state.players.length, 3);
@@ -98,7 +116,7 @@ test('only the current player may act, and state is redacted per player', () => 
   const rm = manager();
   const { clients } = lobbyWith(rm, 2, 1);
   const [host, guest] = clients;
-  rm.handle(host, { t: 'start' });
+  startGame(rm, clients);
   const room = host.room;
 
   // Guest cannot place during the host's setup turn.
@@ -120,7 +138,7 @@ test('only the current player may act, and state is redacted per player', () => 
 test('redaction hides opponents hands, dev cards and private event details', () => {
   const rm = manager();
   const { clients } = lobbyWith(rm, 1, 2);
-  rm.handle(clients[0], { t: 'start' });
+  startGame(rm, clients);
   const full = structuredClone(clients[0].room.state);
   full.players[0].resources = { brick: 1, lumber: 2, wool: 0, grain: 0, ore: 0 };
   full.players[1].resources = { brick: 3, lumber: 0, wool: 1, grain: 0, ore: 0 };
@@ -144,7 +162,7 @@ test('discard and trade responses are bound to the sender seat', () => {
   const rm = manager();
   const { clients } = lobbyWith(rm, 2, 1);
   const [host, guest] = clients;
-  rm.handle(host, { t: 'start' });
+  startGame(rm, clients);
   const room = host.room;
   // Fast-forward through setup with bot logic for everyone.
   while (room.state.phase === 'setup') {
@@ -174,7 +192,7 @@ test('malformed actions are rejected without corrupting state', () => {
   const rm = manager();
   const { clients } = lobbyWith(rm, 1, 2);
   const [host] = clients;
-  rm.handle(host, { t: 'start' });
+  startGame(rm, clients);
   const room = host.room;
   const before = JSON.stringify(room.state);
   for (const action of [
@@ -200,7 +218,7 @@ test('reconnect with token, replace an absent player with a bot, and take the se
   const { code, clients } = lobbyWith(rm, 2, 1);
   const [host, guest] = clients;
   const token = guest.last('session').token;
-  rm.handle(host, { t: 'start' });
+  startGame(rm, clients);
   rm.disconnect(guest);
   assert.equal(host.last('room').room.seats[1].connected, false);
 
@@ -247,7 +265,7 @@ test('a networked game with one human and bots can be played to the end', () => 
   const rm = manager();
   const { clients } = lobbyWith(rm, 1, 3);
   const [host] = clients;
-  rm.handle(host, { t: 'start' });
+  startGame(rm, clients);
   const room = host.room;
   let guard = 0;
   while (room.state.phase !== 'ended' && guard++ < 20000) {
@@ -266,4 +284,77 @@ test('a networked game with one human and bots can be played to the end', () => 
   // Host restarts back to the lobby.
   rm.handle(host, { t: 'restart' });
   assert.equal(host.last('room').room.phase, 'lobby');
+});
+
+
+test('the starting player is decided by a roll-off, with ties re-rolled', () => {
+  const rm = manager();
+  const { clients } = lobbyWith(rm, 2, 1);
+  const [host, guest] = clients;
+  // Nobody can roll before the host starts.
+  rm.handle(guest, { t: 'rollDie' });
+  assert.match(guest.last('error').message, /no roll-off/i);
+  rm.handle(host, { t: 'start' });
+  const room = host.room;
+  assert.equal(room.phase, 'rolloff');
+  let view = guest.last('room').room;
+  assert.equal(view.phase, 'rolloff');
+  assert.deepEqual(view.rolloff.rolls, [[], [], []]);
+  assert.deepEqual(view.rolloff.pending, [0, 1, 2]);
+  assert.equal(guest.last('room').state, null);
+  // Late joiners are told the game is starting.
+  const late = fakeClient();
+  rm.handle(late, { t: 'join', room: room.code, name: 'Late' });
+  assert.match(late.last('error').message, /starting/);
+
+  // Everyone rolls a 6: the bot on its timer, the humans by hand.
+  rm.roll = () => 6;
+  rm.runTimers(5);
+  assert.deepEqual(room.rolloff[2], [6]);
+  rm.handle(guest, { t: 'rollDie' });
+  assert.deepEqual(room.rolloff[1], [6]);
+  rm.handle(guest, { t: 'rollDie' });
+  assert.match(guest.last('error').message, /already rolled/);
+  rm.handle(host, { t: 'rollDie' });
+  assert.equal(room.phase, 'rolloff');
+  view = guest.last('room').room;
+  assert.deepEqual(view.rolloff.rolls, [[6], [6], [6]]);
+  assert.deepEqual(view.rolloff.pending, [0, 1, 2]);
+
+  // Re-roll: host 2, guest 5, bot 3.
+  rm.roll = (idx) => [2, 5, 3][idx];
+  rm.runTimers(5);
+  rm.handle(host, { t: 'rollDie' });
+  assert.equal(room.phase, 'rolloff');
+  rm.handle(guest, { t: 'rollDie' });
+  assert.equal(room.phase, 'game');
+  const state = host.last('room').state;
+  assert.deepEqual(state.turnOrder, [1, 2, 0]);
+  assert.equal(state.turn.player, 1);
+  assert.equal(state.log[0].text, 'Roll-off: P2 6→5, Bot 1 6→3, Host 6→2. P2 goes first.');
+  assert.equal(host.last('room').room.rolloff, null);
+  assert.equal(host.last('room').room.phase, 'game');
+});
+
+test('the host can return a roll-off to the lobby, and a leaving player resets it', () => {
+  const rm = manager();
+  const { clients } = lobbyWith(rm, 2, 1);
+  const [host, guest] = clients;
+  rm.handle(host, { t: 'start' });
+  rm.handle(guest, { t: 'cancelRollOff' });
+  assert.match(guest.last('error').message, /host/);
+  rm.handle(host, { t: 'cancelRollOff' });
+  assert.equal(host.room.phase, 'lobby');
+  assert.equal(host.room.rolloff, null);
+  assert.equal(guest.last('room').room.rolloff, null);
+  // Options can be changed again, then start once more; a leaving guest sends everyone back.
+  rm.handle(host, { t: 'start' });
+  rm.handle(guest, { t: 'rollDie' });
+  rm.handle(guest, { t: 'leave' });
+  assert.equal(host.room.phase, 'lobby');
+  assert.equal(host.room.seats.length, 2);
+  rm.handle(host, { t: 'addBot' });
+  startGame(rm, [host]);
+  assert.equal(host.room.phase, 'game');
+  assert.equal(host.room.state.players.length, 3);
 });

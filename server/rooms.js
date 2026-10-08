@@ -1,6 +1,7 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { newGame, act, GameError, actingPlayers } from '../src/game.js';
 import { botAction } from '../src/ai.js';
+import { createRollOff, addRoll, needsRoll, pendingRollers, isComplete, rollOrder, describeRollOff } from '../src/rolloff.js';
 import { PLAYER_COLORS, DEFAULT_OPTIONS, RESOURCES } from '../src/constants.js';
 import { redactFor } from './redact.js';
 
@@ -99,8 +100,9 @@ function lobbyOptions() {
  * A "client" is any object with a `send(message)` method; the WebSocket layer wraps sockets in one.
  */
 export class RoomManager {
-  constructor({ schedule = (fn, ms) => setTimeout(fn, ms), cancel = (t) => clearTimeout(t), botDelay = 700, maxRooms = 1000, roomTtlMs = 3 * 60 * 60 * 1000, now = () => Date.now(), log = () => {} } = {}) {
+  constructor({ schedule = (fn, ms) => setTimeout(fn, ms), cancel = (t) => clearTimeout(t), botDelay = 700, maxRooms = 1000, roomTtlMs = 3 * 60 * 60 * 1000, now = () => Date.now(), log = () => {}, roll = () => randomInt(1, 7) } = {}) {
     this.rooms = new Map();
+    this.roll = roll; // (seatIndex) => 1..6, injectable for tests
     this.schedule = schedule;
     this.cancel = cancel;
     this.botDelay = botDelay;
@@ -139,6 +141,10 @@ export class RoomManager {
           return this.removeSeat(client, msg);
         case 'start':
           return this.start(client);
+        case 'rollDie':
+          return this.rollDie(client);
+        case 'cancelRollOff':
+          return this.cancelRollOff(client);
         case 'action':
           return this.action(client, msg);
         case 'replaceWithBot':
@@ -187,7 +193,7 @@ export class RoomManager {
     this.detach(client);
     if (this.rooms.size >= this.maxRooms) fail('The server is full. Try again later.');
     const code = this.newCode();
-    const room = { code, phase: 'lobby', seats: [], host: null, options: lobbyOptions(), state: null, seq: 0, botTimer: null, lastActivity: this.now() };
+    const room = { code, phase: 'lobby', seats: [], host: null, options: lobbyOptions(), state: null, rolloff: null, seq: 0, botTimer: null, lastActivity: this.now() };
     this.rooms.set(code, room);
     const seat = this.addSeat(room, { name: cleanName(msg.name, 'Player 1'), isBot: false });
     room.host = seat;
@@ -198,6 +204,7 @@ export class RoomManager {
 
   join(client, msg) {
     const room = this.findRoom(msg.room);
+    if (room.phase === 'rolloff') fail('That game is just starting; ask the host to go back to the lobby.');
     if (room.phase !== 'lobby') fail('That game has already started.');
     if (room.seats.length >= MAX_SEATS) fail('That game is full.');
     this.detach(client);
@@ -233,7 +240,8 @@ export class RoomManager {
     if (!room) return;
     const seat = client.seat;
     this.detach(client);
-    if (room.phase === 'lobby' && seat.clients.size === 0) {
+    if ((room.phase === 'lobby' || room.phase === 'rolloff') && seat.clients.size === 0) {
+      if (room.phase === 'rolloff') this.backToLobby(room); // the table changed; roll again from the lobby
       room.seats.splice(room.seats.indexOf(seat), 1);
       if (room.host === seat) room.host = room.seats.find((s) => !s.isBot) || null;
       if (!room.seats.some((s) => !s.isBot)) {
@@ -288,17 +296,77 @@ export class RoomManager {
     this.broadcast(room);
   }
 
+  /** The host starts: everyone rolls a die for the starting position before the board appears. */
   start(client) {
     const { room } = this.lobbyContext(client, { host: true });
     if (room.seats.length < MIN_SEATS) fail(`You need at least ${MIN_SEATS} players. Add bots to fill the empty seats.`);
+    room.phase = 'rolloff';
+    room.rolloff = createRollOff(room.seats.length);
+    room.seq += 1;
+    this.broadcast(room);
+    this.scheduleRollOffBots(room);
+  }
+
+  rollDie(client) {
+    const room = client.room;
+    if (!room || room.phase !== 'rolloff') fail('There is no roll-off going on.');
+    const idx = room.seats.indexOf(client.seat);
+    if (!needsRoll(room.rolloff, idx)) fail('You have already rolled. Wait for the others.');
+    this.recordRoll(room, idx, this.roll(idx));
+  }
+
+  cancelRollOff(client) {
+    const room = client.room;
+    if (!room || room.phase !== 'rolloff') fail('There is no roll-off going on.');
+    if (!this.isHost(room, client.seat)) fail('Only the host can go back to the lobby.');
+    this.backToLobby(room);
+    this.broadcast(room);
+  }
+
+  backToLobby(room) {
+    if (room.botTimer) this.cancel(room.botTimer);
+    room.botTimer = null;
+    room.phase = 'lobby';
+    room.rolloff = null;
+    room.state = null;
+    room.seq += 1;
+  }
+
+  recordRoll(room, idx, value) {
+    room.rolloff = addRoll(room.rolloff, idx, value);
+    room.lastActivity = this.now();
+    if (isComplete(room.rolloff)) {
+      this.beginGame(room);
+      return;
+    }
+    this.broadcast(room);
+    this.scheduleRollOffBots(room);
+  }
+
+  scheduleRollOffBots(room) {
+    if (room.botTimer || room.phase !== 'rolloff') return;
+    const bot = pendingRollers(room.rolloff).find((idx) => room.seats[idx].isBot);
+    if (bot === undefined) return;
+    room.botTimer = this.schedule(() => {
+      room.botTimer = null;
+      if (!this.rooms.has(room.code) || room.phase !== 'rolloff' || !needsRoll(room.rolloff, bot)) return;
+      this.recordRoll(room, bot, this.roll(bot));
+    }, this.botDelay);
+  }
+
+  beginGame(room) {
+    const order = rollOrder(room.rolloff);
     room.state = newGame({
       ...room.options,
       playerCount: room.seats.length,
       passDevice: false,
       seed: null,
+      turnOrder: order,
       players: room.seats.map((s) => ({ name: s.name, color: s.color, isBot: s.isBot })),
     });
+    room.state.log.unshift({ turn: 0, player: order[0], text: describeRollOff(room.seats.map((s) => s.name), room.rolloff) });
     room.phase = 'game';
+    room.rolloff = null;
     room.seq += 1;
     this.log(`room ${room.code} started with ${room.seats.length} players`);
     this.broadcast(room);
@@ -416,6 +484,7 @@ export class RoomManager {
       host: room.seats.indexOf(this.effectiveHost(room)),
       options: room.options,
       seats: room.seats.map((s) => ({ name: s.name, color: s.color, isBot: s.isBot, connected: s.isBot || s.clients.size > 0, replacedByBot: !!s.replacedByBot })),
+      rolloff: room.rolloff ? { rolls: room.rolloff, pending: pendingRollers(room.rolloff) } : null,
     };
   }
 
