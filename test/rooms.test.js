@@ -375,7 +375,7 @@ test('the host can return a roll-off to the lobby, and a leaving player resets i
 });
 
 
-test('undo: offered to the actor for a few seconds, bots wait, and it expires or is overtaken', () => {
+test('undo: offered to the actor, the game holds for everyone else, and it expires or is released', () => {
   const rm = manager({ undo: true });
   const { clients } = lobbyWith(rm, 2, 1);
   const [host, guest] = clients;
@@ -384,14 +384,14 @@ test('undo: offered to the actor for a few seconds, bots wait, and it expires or
   const room = host.room;
   assert.equal(room.state.turn.player, 0);
 
-  // Host places a settlement: the host gets an offer, the guest does not.
+  // Host places a settlement: the host gets an offer; the guest is told about the hold but cannot take it.
   const v = validSettlementVertices(room.state, 0, { setup: true })[0];
   rm.handle(host, { t: 'action', action: { type: 'placeSettlement', vertex: v } });
   const offer = host.last('room').undo;
   assert.equal(offer.label, 'settlement placement');
+  assert.equal(offer.player, 0);
   assert.equal(offer.remainingMs, 4000);
-  assert.equal(guest.last('room').undo, null);
-  // Only the actor may undo.
+  assert.equal(guest.last('room').undo.player, 0);
   rm.handle(guest, { t: 'undo' });
   assert.match(guest.last('error').message, /nothing to undo/i);
   rm.handle(host, { t: 'undo' });
@@ -399,44 +399,85 @@ test('undo: offered to the actor for a few seconds, bots wait, and it expires or
   assert.equal(room.state.setup.step, 'settlement');
   assert.match(room.state.log.at(-1).text, /Host takes back their settlement placement/);
   assert.equal(host.last('room').undo, null);
-  // A second undo has nothing to take back.
   rm.handle(host, { t: 'undo' });
   assert.match(host.last('error').message, /nothing to undo/i);
 
-  // Place again, then let the window expire: too late.
+  // Place again and let the window expire: the expiry timer tells everyone the hold is over.
   rm.handle(host, { t: 'action', action: { type: 'placeSettlement', vertex: v } });
-  rm.clock.now += 4001;
+  assert.ok(rm.timers.some((t) => t.ms >= 4000), 'an expiry timer is armed');
+  rm.runTimers(5);
+  assert.equal(host.last('room').undo, null);
   rm.handle(host, { t: 'undo' });
   assert.match(host.last('error').message, /nothing to undo/i);
   assert.equal(room.state.board.vertices[v].building.player, 0);
 
-  // Finish the host's placement; the next seat is the guest, so another human action overtakes the offer.
+  // Host places the road: the guest is next but must wait out the window.
   const e = validRoadEdges(room.state, 0, { fromVertex: v })[0];
   rm.handle(host, { t: 'action', action: { type: 'placeRoad', edge: e } });
-  assert.equal(host.last('room').undo.label, 'road placement');
   assert.equal(room.state.turn.player, 1);
   const v2 = validSettlementVertices(room.state, 1, { setup: true })[0];
   rm.handle(guest, { t: 'action', action: { type: 'placeSettlement', vertex: v2 } });
-  rm.handle(host, { t: 'undo' });
-  assert.match(host.last('error').message, /nothing to undo/i);
+  assert.match(guest.last('error').message, /can still undo/);
+  assert.equal(room.state.board.vertices[v2].building, null);
+  // The host keeps the move with Keep: the hold lifts at once.
+  rm.handle(host, { t: 'dismissUndo' });
+  assert.equal(guest.last('room').undo, null);
+  rm.handle(guest, { t: 'action', action: { type: 'placeSettlement', vertex: v2 } });
+  assert.equal(room.state.board.vertices[v2].building.player, 1);
   assert.equal(guest.last('room').undo.label, 'settlement placement');
 
   // Guest finishes: the bot is next, but it must wait out the guest's undo window.
+  rm.clock.now += 4001;
   const e2 = validRoadEdges(room.state, 1, { fromVertex: v2 })[0];
   rm.handle(guest, { t: 'action', action: { type: 'placeRoad', edge: e2 } });
   assert.equal(room.state.turn.player, 2);
-  assert.equal(rm.timers.length, 1);
-  assert.ok(rm.timers[0].ms >= 4000, `bot delay was ${rm.timers[0].ms}`);
-  // The guest changes their mind in time; the bot timer then finds nothing to do for the bot.
+  const botTimer = rm.timers.find((t) => t.ms >= 4040);
+  assert.ok(botTimer, `bot waits for the window: ${JSON.stringify(rm.timers.map((t) => t.ms))}`);
+  // The guest changes their mind in time; the timers then find nothing for the bot to do.
   rm.handle(guest, { t: 'undo' });
   assert.equal(room.state.turn.player, 1);
   rm.runTimers(5);
   assert.equal(room.state.turn.player, 1);
   rm.handle(guest, { t: 'action', action: { type: 'placeRoad', edge: e2 } });
   rm.runTimers(5);
-  assert.equal(room.state.board.vertices[validSettlementVertices(room.state, 2, { setup: true })[0]].building, null);
-  // Bot moves happen after the window and never carry an offer.
-  assert.ok(room.state.turn.player !== 2 || room.state.setup.step !== 'settlement' || rm.timers.length > 0);
+  assert.equal(room.state.turn.player !== 2 || room.state.setup.step === 'road', true); // the bot has placed its settlement
+});
+
+test('undo: a bought development card stays face down until the window closes, and can be returned', () => {
+  const rm = manager({ undo: true });
+  const { clients } = lobbyWith(rm, 2, 1);
+  const [host, guest] = clients;
+  startGame(rm, clients);
+  const room = host.room;
+  while (room.state.phase === 'setup') {
+    const pid = actingPlayers(room.state)[0];
+    rm.apply(room, botAction(room.state, pid));
+  }
+  rm.runTimers(0);
+  room.state.turn.player = 0;
+  room.state.turn.rolled = true;
+  room.state.players[0].resources = { brick: 0, lumber: 0, wool: 1, grain: 1, ore: 1 };
+  const deckBefore = room.state.devDeck.length;
+  rm.handle(host, { t: 'action', action: { type: 'buyDevCard' } });
+  const mine = host.last('room').state.players[0].devCards;
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].type, 'hidden'); // face down even for the buyer
+  assert.equal(host.last('room').state.lastEvent.card, undefined);
+  assert.equal(host.last('room').undo.label, 'card purchase');
+  assert.equal(guest.last('room').state.players[0].devCards[0].type, 'hidden');
+  // Undo returns the card to the deck and the resources to the player.
+  rm.handle(host, { t: 'undo' });
+  assert.equal(room.state.devDeck.length, deckBefore);
+  assert.equal(room.state.players[0].devCards.length, 0);
+  assert.equal(room.state.players[0].resources.ore, 1);
+  // Buy again and keep it: the card turns face up for the buyer only.
+  rm.handle(host, { t: 'action', action: { type: 'buyDevCard' } });
+  assert.equal(host.last('room').state.players[0].devCards[0].type, 'hidden');
+  rm.handle(host, { t: 'dismissUndo' });
+  const real = room.state.players[0].devCards[0].type;
+  assert.notEqual(real, 'hidden');
+  assert.equal(host.last('room').state.players[0].devCards[0].type, real);
+  assert.equal(guest.last('room').state.players[0].devCards[0].type, 'hidden');
 });
 
 test('undo: trades with players are never undoable, and the option can be turned off', () => {

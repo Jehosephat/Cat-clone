@@ -8,7 +8,7 @@ import { emptyResources, totalResources } from '../src/rules.js';
  * @param {object} state full game state
  * @param {number|null} seat viewer's player id, or null for a spectator
  */
-export function redactFor(state, seat) {
+export function redactFor(state, seat, { faceDownCardOf = null } = {}) {
   const s = structuredClone(state);
   s.seed = 0;
   s.rngState = 0;
@@ -23,8 +23,15 @@ export function redactFor(state, seat) {
     p.devCards = p.devCards.map((_, i) => ({ id: `hidden-${p.id}-${i}`, type: 'hidden' }));
   }
 
+  // A just-bought card stays face down for its owner while the purchase can still be undone.
+  if (faceDownCardOf !== null && s.players[faceDownCardOf]) {
+    const cards = s.players[faceDownCardOf].devCards;
+    const last = cards[cards.length - 1];
+    if (last) cards[cards.length - 1] = { id: last.id, type: 'hidden', boughtTurn: last.boughtTurn };
+  }
+
   const ev = s.lastEvent;
   if (ev && ev.type === 'steal' && seat !== ev.thief && seat !== ev.victim) delete ev.resource;
-  if (ev && ev.type === 'devCardBought' && seat !== ev.player) delete ev.card;
+  if (ev && ev.type === 'devCardBought' && (seat !== ev.player || faceDownCardOf === ev.player)) delete ev.card;
   return s;
 }

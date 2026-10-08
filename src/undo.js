@@ -1,11 +1,12 @@
-// Undo offers: after most actions the acting player may take it back for a few seconds,
-// as long as nobody else has acted since. Player-to-player trades involve other people's
-// decisions, and dice rolls, card purchases and steals reveal chance outcomes, so none of
-// those can be undone.
+// Undo offers: after most actions the acting player may take it back for a few seconds.
+// While the window is open the game holds: nobody else may act. Player-to-player trades
+// involve other people's decisions, and dice rolls and steals reveal chance outcomes, so
+// those cannot be undone. A card purchase can: the drawn card stays face down until the
+// window closes.
 
 export const UNDO_WINDOW_MS = 4000;
 
-const NOT_UNDOABLE = new Set(['proposeTrade', 'respondTrade', 'acceptTrade', 'cancelTrade', 'roll', 'buyDevCard', 'steal']);
+const NOT_UNDOABLE = new Set(['proposeTrade', 'respondTrade', 'acceptTrade', 'cancelTrade', 'roll', 'steal']);
 
 export function isUndoable(actionType) {
   return !NOT_UNDOABLE.has(actionType);
@@ -17,6 +18,7 @@ const LABELS = {
   buildRoad: 'road',
   buildSettlement: 'settlement',
   buildCity: 'city upgrade',
+  buyDevCard: 'card purchase',
   discard: 'discard',
   moveRobber: 'robber move',
   playDevCard: 'card play',

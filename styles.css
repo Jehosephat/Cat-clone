@@ -1206,9 +1206,26 @@ h3 {
     opacity: 1;
   }
 }
+.undo-row {
+  display: flex;
+  gap: 6px;
+}
 .undo-btn {
-  width: 100%;
+  flex: 1;
   min-height: 42px;
+}
+.undo-keep {
+  min-height: 42px;
+  padding: 8px 10px;
+}
+.undo-banner.hold {
+  background: rgba(22, 40, 61, 0.96);
+}
+.hold-text {
+  padding: 8px 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
 }
 .undo-progress {
   height: 4px;

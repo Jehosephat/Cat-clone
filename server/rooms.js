@@ -152,6 +152,8 @@ export class RoomManager {
           return this.action(client, msg);
         case 'undo':
           return this.undo(client);
+        case 'dismissUndo':
+          return this.dismissUndo(client);
         case 'replaceWithBot':
           return this.replaceWithBot(client, msg);
         case 'restart':
@@ -200,7 +202,7 @@ export class RoomManager {
     this.detach(client);
     if (this.rooms.size >= this.maxRooms) fail('The server is full. Try again later.');
     const code = this.newCode();
-    const room = { code, phase: 'lobby', seats: [], host: null, options: lobbyOptions(), state: null, rolloff: null, undo: null, chat: [], chatId: 0, seq: 0, botTimer: null, lastActivity: this.now() };
+    const room = { code, phase: 'lobby', seats: [], host: null, options: lobbyOptions(), state: null, rolloff: null, undo: null, undoTimer: null, chat: [], chatId: 0, seq: 0, botTimer: null, lastActivity: this.now() };
     this.rooms.set(code, room);
     const seat = this.addSeat(room, { name: cleanName(msg.name, 'Player 1'), isBot: false });
     room.host = seat;
@@ -334,6 +336,7 @@ export class RoomManager {
   backToLobby(room) {
     if (room.botTimer) this.cancel(room.botTimer);
     room.botTimer = null;
+    this.clearUndo(room);
     room.phase = 'lobby';
     room.rolloff = null;
     room.state = null;
@@ -421,6 +424,9 @@ export class RoomManager {
     const seatIdx = room.seats.indexOf(client.seat);
     const action = sanitizeAction(msg.action);
     const state = room.state;
+    // The game holds while someone else may still undo.
+    const hold = this.activeUndo(room);
+    if (hold && hold.player !== seatIdx) fail(`${room.seats[hold.player].name} can still undo for a moment. Please wait.`);
     if (SELF_ACTIONS.has(action.type)) action.player = seatIdx;
     else if (state.turn.player !== seatIdx) fail("It's not your turn.");
     this.apply(room, action, seatIdx);
@@ -450,10 +456,27 @@ export class RoomManager {
     room.seq += 1;
     room.lastActivity = this.now();
     const offer = room.options.undo ? makeUndoOffer(prev, room.state, action.type, by, this.now()) : null;
-    room.undo = offer ? { ...offer, seq: room.seq } : null;
+    this.clearUndo(room);
+    if (offer) {
+      room.undo = { ...offer, seq: room.seq };
+      // When the window closes untouched, tell everyone so the hold lifts and a face-down card turns over.
+      room.undoTimer = this.schedule(() => {
+        room.undoTimer = null;
+        if (!this.rooms.has(room.code) || !room.undo || room.undo.seq !== room.seq) return;
+        room.undo = null;
+        this.broadcast(room);
+        this.scheduleBots(room);
+      }, offer.until - this.now() + 10);
+    }
     if (room.state.phase === 'ended') this.log(`room ${room.code} finished`);
     this.broadcast(room);
     this.scheduleBots(room);
+  }
+
+  clearUndo(room) {
+    if (room.undoTimer) this.cancel(room.undoTimer);
+    room.undoTimer = null;
+    room.undo = null;
   }
 
   /** The open undo offer, if it is still valid for the current state and has not expired. */
@@ -470,9 +493,21 @@ export class RoomManager {
     const idx = room.seats.indexOf(client.seat);
     if (!u || u.player !== idx) fail('Nothing to undo.');
     room.state = restoreFromOffer(u, client.seat.name);
-    room.undo = null;
+    this.clearUndo(room);
     room.seq += 1;
     room.lastActivity = this.now();
+    this.broadcast(room);
+    this.scheduleBots(room);
+  }
+
+  /** The actor keeps the move and releases the hold early. */
+  dismissUndo(client) {
+    const room = client.room;
+    if (!room || room.phase !== 'game') fail('No game in progress.');
+    const u = this.activeUndo(room);
+    const idx = room.seats.indexOf(client.seat);
+    if (!u || u.player !== idx) return; // nothing to release; not an error worth reporting
+    this.clearUndo(room);
     this.broadcast(room);
     this.scheduleBots(room);
   }
@@ -525,14 +560,15 @@ export class RoomManager {
   /** Send every connected player their own view of the room. */
   broadcast(room) {
     const u = room.phase === 'game' ? this.activeUndo(room) : null;
+    const faceDownCardOf = u && u.label === 'card purchase' ? u.player : null;
     room.seats.forEach((seat, idx) => {
       if (seat.clients.size === 0) return;
       const msg = {
         t: 'room',
         room: this.publicRoom(room, idx),
         seq: room.seq,
-        state: room.state ? redactFor(room.state, idx) : null,
-        undo: u && u.player === idx ? { label: u.label, remainingMs: u.until - this.now() } : null,
+        state: room.state ? redactFor(room.state, idx, { faceDownCardOf }) : null,
+        undo: u ? { player: u.player, label: u.label, remainingMs: u.until - this.now() } : null,
       };
       for (const c of seat.clients) c.send(msg);
     });
@@ -618,6 +654,7 @@ export class RoomManager {
     const room = this.rooms.get(code);
     if (!room) return;
     if (room.botTimer) this.cancel(room.botTimer);
+    this.clearUndo(room);
     this.rooms.delete(code);
     this.log(`room ${code} closed`);
   }

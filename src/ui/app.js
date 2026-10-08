@@ -70,6 +70,8 @@ const QUICK_CHAT = ['👋 Hi!', 'Anyone have ore?', 'Trade?', 'Nice move!', 'Goo
 /** Local-mode undo offer: {state, player, label, until, result} where `result` is the state the offer belongs to. */
 let localUndo = null;
 let undoTimer = null;
+/** A card bought locally whose identity is withheld until its undo window closes: {player, card}. */
+let pendingReveal = null;
 
 // ---------------------------------------------------------------------------
 // Storage helpers
@@ -203,9 +205,16 @@ function dispatch(action) {
   }
   try {
     const prev = state;
-    const next = act(prev, action);
     const actor = action.player !== undefined ? action.player : prev.turn.player;
+    const hold = currentUndo();
+    if (hold && hold.player !== actor) {
+      toast(`${state.players[hold.player].name} can still undo for a moment. Please wait.`);
+      render();
+      return false;
+    }
+    const next = act(prev, action);
     const offer = prev.options.undo && !prev.players[actor].isBot ? makeUndoOffer(prev, next, action.type, actor, Date.now()) : null;
+    if (pendingReveal) revealPendingCard(); // a new action keeps the previous purchase
     localUndo = offer ? { ...offer, result: next } : null;
     setState(next);
     return true;
@@ -224,8 +233,12 @@ function setState(next) {
   const prevKey = contextKey();
   const prevState = state;
   const prevActor = prevState ? requiredActor() : null;
+  const prevFaceDown = prevState && isOnline() && mySeat() !== null ? prevState.players[mySeat()].devCards.filter((c) => c.type === 'hidden').map((c) => c.id) : [];
   state = next;
   if (localUndo && localUndo.result !== next) localUndo = null; // any other change overtakes the offer
+  if (prevFaceDown.length && mySeat() !== null) {
+    for (const c of state.players[mySeat()].devCards) if (prevFaceDown.includes(c.id) && c.type !== 'hidden') toast(`You drew: ${DEV_CARD_LABEL[c.type]}`, 'info');
+  }
   // Sounds: "ka-ching" when another player's trade offer arrives for someone on this device,
   // otherwise a ding when it becomes this device's move (a turn starting, or a prompt such as a discard).
   const actor = state.phase === 'ended' ? null : requiredActor();
@@ -299,8 +312,27 @@ function announceEvents() {
   if (ev.type === 'steal' && !state.players[ev.thief].isBot && (!state.options.passDevice || humans().length < 2 || ui.viewer === ev.thief)) {
     toast(`You stole ${RESOURCE_ICON[ev.resource]} ${RESOURCE_LABEL[ev.resource]} from ${state.players[ev.victim].name}.`, 'info');
   } else if (ev.type === 'devCardBought' && !state.players[ev.player].isBot) {
-    toast(`You drew: ${DEV_CARD_LABEL[ev.card]}`, 'info');
+    if (localUndo && localUndo.result === state && localUndo.label === 'card purchase') pendingReveal = { player: ev.player, card: ev.card };
+    else toast(`You drew: ${DEV_CARD_LABEL[ev.card]}`, 'info');
   }
+}
+
+/** The face-down card's identity, shown once the purchase is kept (window closed or dismissed). */
+function revealPendingCard() {
+  const r = pendingReveal;
+  pendingReveal = null;
+  if (!r || !state || state.players[r.player].isBot) return;
+  if (!isOnline() && state.options.passDevice && humans().length >= 2 && ui.viewer !== r.player) return;
+  toast(`You drew: ${DEV_CARD_LABEL[r.card]}`, 'info');
+}
+
+/** Ids of cards this device must show face down right now. */
+function faceDownCardIds() {
+  const u = currentUndo();
+  if (!u || u.label !== 'card purchase') return new Set();
+  if (isOnline()) return new Set(); // the server already sends the card as hidden
+  const cards = state.players[u.player].devCards;
+  return cards.length ? new Set([cards[cards.length - 1].id]) : new Set();
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +417,7 @@ function handleRoom(msg) {
   const prevRoom = online.room;
   online.room = msg.room;
   online.wantRejoin = false;
-  online.undo = msg.undo && msg.room.phase === 'game' ? { label: msg.undo.label, until: Date.now() + msg.undo.remainingMs } : null;
+  online.undo = msg.undo && msg.room.phase === 'game' ? { player: msg.undo.player, label: msg.undo.label, until: Date.now() + msg.undo.remainingMs } : null;
   if (msg.room.phase === 'lobby' || msg.room.phase === 'rolloff') {
     if (!prevRoom || prevRoom.phase !== msg.room.phase) {
       closeModal();
@@ -532,7 +564,7 @@ function optionControls(opts, onChange, { readOnly = false } = {}) {
     h('div', { class: 'field' }, h('span', {}, 'Victory points to win'), segRow([8, 10, 12, 15].map((n) => [n, String(n)]), opts.targetVP, (v) => set({ targetVP: v }), { disabled: readOnly })),
     h('div', { class: 'field' }, h('span', {}, 'Discard when holding more than'), segRow([[7, '7 cards'], [9, '9 cards']], opts.discardLimit, (v) => set({ discardLimit: v }), { disabled: readOnly })),
     toggleRow('Friendly robber', 'The robber cannot be placed next to players with 2 or fewer points', opts.friendlyRobber, (v) => set({ friendlyRobber: v }), readOnly),
-    toggleRow('Undo window', 'After most actions, offer a 4-second undo. Trades, dice rolls, card purchases and steals cannot be undone.', opts.undo, (v) => set({ undo: v }), readOnly),
+    toggleRow('Undo window', 'After most actions, offer a 4-second undo; the game waits for it. Trades, dice rolls and steals cannot be undone.', opts.undo, (v) => set({ undo: v }), readOnly),
   ];
 }
 
@@ -968,17 +1000,35 @@ function render() {
   });
 }
 
-/** The undo offer this device may take right now, or null. */
-function activeUndo() {
+/** The open undo offer for the current state, whoever it belongs to, or null. */
+function currentUndo() {
   const now = Date.now();
   if (isOnline()) return online.undo && online.undo.until > now ? online.undo : null;
   if (!localUndo || localUndo.until <= now || localUndo.result !== state) return null;
-  // In pass-and-play the device may already have been handed on.
-  if (state.options.passDevice && humans().length >= 2 && ui.viewer !== localUndo.player) return null;
   return localUndo;
 }
 
+/** The undo offer this device may take right now, or null. */
+function activeUndo() {
+  const u = currentUndo();
+  if (!u) return null;
+  if (isOnline()) return u.player === mySeat() ? u : null;
+  // In pass-and-play the device may already have been handed on.
+  if (state.options.passDevice && humans().length >= 2 && ui.viewer !== u.player) return null;
+  return u;
+}
+
+/** An open undo offer belonging to someone other than the player this device must act for: the game holds. */
+function undoHold() {
+  const u = currentUndo();
+  if (!u) return null;
+  if (isOnline()) return u.player !== mySeat() ? u : null;
+  const actor = requiredActor();
+  return actor !== null && actor !== u.player ? u : null;
+}
+
 function takeUndo() {
+  pendingReveal = null;
   if (isOnline()) {
     online.undo = null;
     send({ t: 'undo' });
@@ -993,12 +1043,49 @@ function takeUndo() {
   setState(restoreFromOffer(u, state.players[u.player].name));
 }
 
+/** Keep the move and release the hold without waiting for the window to run out. */
+function dismissUndo() {
+  if (isOnline()) {
+    online.undo = null;
+    send({ t: 'dismissUndo' });
+    render();
+    return;
+  }
+  localUndo = null;
+  revealPendingCard();
+  render();
+  scheduleBots();
+}
+
+/** Called when the window has run out on its own. */
+function undoWindowClosed() {
+  if (!isOnline() && localUndo && localUndo.until <= Date.now()) {
+    localUndo = null;
+    revealPendingCard();
+  }
+  render();
+}
+
+function armUndoRender(until) {
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(undoWindowClosed, Math.max(0, until - Date.now()) + 30);
+}
+
 function renderUndoBanner(offer) {
   const remaining = Math.max(0, offer.until - Date.now());
-  clearTimeout(undoTimer);
-  undoTimer = setTimeout(() => render(), remaining + 30); // slide the banner away when the window closes
   return h('div', { class: 'undo-banner', role: 'status' },
-    h('button', { class: 'btn btn-primary undo-btn', onclick: takeUndo }, `↩ Undo ${offer.label}`),
+    h('div', { class: 'undo-row' },
+      h('button', { class: 'btn btn-primary undo-btn', onclick: takeUndo }, `↩ Undo ${offer.label}`),
+      h('button', { class: 'btn undo-keep', title: 'Keep it and let the game continue', onclick: dismissUndo }, '✓ Keep'),
+    ),
+    h('div', { class: 'undo-progress' }, h('div', { class: 'undo-progress-bar', style: { animationDuration: `${remaining}ms` } })),
+  );
+}
+
+function renderHoldNotice(hold) {
+  const remaining = Math.max(0, hold.until - Date.now());
+  return h('div', { class: 'undo-banner hold', role: 'status' },
+    h('div', { class: 'hold-text' }, `${state.players[hold.player].name} may still undo their ${hold.label}…`),
     h('div', { class: 'undo-progress' }, h('div', { class: 'undo-progress-bar', style: { animationDuration: `${remaining}ms` } })),
   );
 }
@@ -1009,7 +1096,11 @@ function renderGame() {
   game.append(h('div', { class: 'board-area' }, renderBoardView()));
   game.append(renderPanel());
   const undo = activeUndo();
+  const hold = undoHold();
   if (undo) game.append(renderUndoBanner(undo));
+  else if (hold && !needsPass()) game.append(renderHoldNotice(hold));
+  const open = currentUndo();
+  if (open) armUndoRender(open.until);
   if (isOnline() && online.status !== 'open') game.append(h('div', { class: 'conn-banner', role: 'status' }, 'Connection lost. Reconnecting…'));
   if (needsPass()) game.append(renderPassOverlay());
   app.append(game);
@@ -1059,7 +1150,7 @@ function renderPlayersBar() {
 function renderBoardView() {
   const view = { vertexTargets: new Set(), edgeTargets: new Set(), hexTargets: new Set() };
   const pid = state.turn.player;
-  const myMove = canControl(pid) && !needsPass();
+  const myMove = canControl(pid) && !needsPass() && !undoHold();
   if (myMove && state.phase === 'setup') {
     if (state.setup.step === 'settlement') view.vertexTargets = new Set(validSettlementVertices(state, pid, { setup: true }));
     else view.edgeTargets = new Set(validRoadEdges(state, pid, { fromVertex: state.setup.lastVertex }));
@@ -1148,7 +1239,7 @@ function renderPanel() {
 
   // Actions
   const actions = h('div', { class: 'actions' });
-  const myTurn = isMyTurn(state.turn.player) && state.turn.player === owner && !needsPass();
+  const myTurn = isMyTurn(state.turn.player) && state.turn.player === owner && !needsPass() && !undoHold();
   const pend = state.pending;
   if (state.phase === 'ended') {
     actions.append(h('button', { class: 'btn btn-primary', onclick: openGameOver }, 'Show results'));
@@ -1242,6 +1333,7 @@ function renderTradePanel() {
 
 function openDevCards(pid, canPlay = true) {
   devCardsModal(state, pid, {
+    faceDownIds: faceDownCardIds(),
     canPlay: canPlay && isMyTurn(pid),
     onPlay: (card) => {
       if (card.type === 'yearOfPlenty') yearOfPlentyModal(state, card, dispatch);
@@ -1367,7 +1459,7 @@ function renderPendingModals() {
     }
     return;
   }
-  if (needsPass()) return;
+  if (needsPass() || undoHold()) return;
   const pend = state.pending;
   if (!pend) return;
   const req = requiredActor();
@@ -1402,6 +1494,9 @@ window.__catan = {
   },
   get sound() {
     return soundStats;
+  },
+  get undo() {
+    return { local: localUndo, online: online.undo, pendingReveal, current: currentUndo(), faceDown: [...faceDownCardIds()] };
   },
   dispatch,
   /** Load a saved local game ({state, viewer}) for debugging. */

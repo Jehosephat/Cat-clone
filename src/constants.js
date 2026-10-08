@@ -57,6 +57,7 @@ export const DEV_CARD_LABEL = {
   roadBuilding: 'Road Building',
   yearOfPlenty: 'Year of Plenty',
   monopoly: 'Monopoly',
+  hidden: 'Face-down card',
 };
 
 export const DEV_CARD_TEXT = {
@@ -65,6 +66,7 @@ export const DEV_CARD_TEXT = {
   roadBuilding: 'Place 2 new roads as if you had just built them.',
   yearOfPlenty: 'Take any 2 resources from the bank. Add them to your hand. They can be 2 of the same resource or 2 different resources.',
   monopoly: 'When you play this card, announce 1 type of resource. All other players must give you all of their resources of that type.',
+  hidden: 'Turned face up once the undo window for the purchase closes.',
 };
 
 export const BANK_PER_RESOURCE = 19;

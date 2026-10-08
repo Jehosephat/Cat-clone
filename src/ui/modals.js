@@ -150,11 +150,14 @@ export function monopolyModal(card, dispatch) {
   });
 }
 
-export function devCardsModal(state, pid, { onPlay, canPlay }) {
+export function devCardsModal(state, pid, { onPlay, canPlay, faceDownIds = new Set() }) {
   const p = state.players[pid];
   const playable = canPlay ? playableDevCards(state).map((c) => c.id) : [];
   const groups = {};
-  for (const c of p.devCards) (groups[c.type] = groups[c.type] || []).push(c);
+  for (const c of p.devCards) {
+    const type = faceDownIds.has(c.id) ? 'hidden' : c.type;
+    (groups[type] = groups[type] || []).push(c);
+  }
   const body = [];
   if (!p.devCards.length) body.push(h('p', { class: 'muted' }, 'You have no development cards.'));
   for (const [type, cards] of Object.entries(groups)) {
@@ -172,9 +175,11 @@ export function devCardsModal(state, pid, { onPlay, canPlay }) {
         { class: `dev-card dev-${type}` },
         h('div', { class: 'dev-head' }, h('strong', {}, DEV_CARD_LABEL[type]), h('span', { class: 'pill' }, `×${cards.length}`)),
         h('p', { class: 'dev-text' }, DEV_CARD_TEXT[type]),
-        type !== 'victoryPoint'
-          ? h('div', { class: 'dev-actions' }, why ? h('span', { class: 'muted small' }, why) : null, h('button', { class: 'btn btn-primary small', disabled: !isPlayable, onclick: () => onPlay(first) }, 'Play'))
-          : h('div', { class: 'dev-actions' }, h('span', { class: 'muted small' }, 'Counts automatically toward victory.')),
+        type === 'hidden'
+          ? h('div', { class: 'dev-actions' }, h('span', { class: 'muted small' }, 'Keep or undo the purchase first.'))
+          : type !== 'victoryPoint'
+            ? h('div', { class: 'dev-actions' }, why ? h('span', { class: 'muted small' }, why) : null, h('button', { class: 'btn btn-primary small', disabled: !isPlayable, onclick: () => onPlay(first) }, 'Play'))
+            : h('div', { class: 'dev-actions' }, h('span', { class: 'muted small' }, 'Counts automatically toward victory.')),
       ),
     );
   }

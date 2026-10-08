@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isUndoable, makeUndoOffer, restoreFromOffer, UNDO_WINDOW_MS } from '../src/undo.js';
 
-test('trades with players, dice rolls, card purchases and steals are never undoable; everything else is', () => {
-  for (const t of ['proposeTrade', 'respondTrade', 'acceptTrade', 'cancelTrade', 'roll', 'buyDevCard', 'steal']) assert.equal(isUndoable(t), false);
-  for (const t of ['buildRoad', 'buildSettlement', 'buildCity', 'endTurn', 'bankTrade', 'discard', 'moveRobber', 'playDevCard', 'placeSettlement', 'placeRoad', 'skipRoadBuilding']) assert.equal(isUndoable(t), true);
+test('trades with players, dice rolls and steals are never undoable; everything else is', () => {
+  for (const t of ['proposeTrade', 'respondTrade', 'acceptTrade', 'cancelTrade', 'roll', 'steal']) assert.equal(isUndoable(t), false);
+  for (const t of ['buildRoad', 'buildSettlement', 'buildCity', 'buyDevCard', 'endTurn', 'bankTrade', 'discard', 'moveRobber', 'playDevCard', 'placeSettlement', 'placeRoad', 'skipRoadBuilding']) assert.equal(isUndoable(t), true);
 });
 
 test('offers are made only for humans and not when the game just ended', () => {
