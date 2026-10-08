@@ -38,6 +38,7 @@ import { botAction } from '../ai.js';
 import { createRollOff, addRoll, pendingRollers, isComplete, rollOrder, describeRollOff } from '../rolloff.js';
 import { createRng } from '../rng.js';
 import { makeUndoOffer, restoreFromOffer } from '../undo.js';
+import { ding, primeAudio, soundEnabled, setSoundEnabled, stats as soundStats } from './sound.js';
 import { RESOURCES, RESOURCE_ICON, RESOURCE_LABEL, PLAYER_COLORS, DEFAULT_OPTIONS, COSTS, DEV_CARD_LABEL } from '../constants.js';
 import { longestRoadLength, handSize } from '../rules.js';
 import { createConnection, loadSession, saveSession } from './net.js';
@@ -219,8 +220,12 @@ function dispatch(action) {
 function setState(next) {
   const prevKey = contextKey();
   const prevState = state;
+  const prevActor = prevState ? requiredActor() : null;
   state = next;
   if (localUndo && localUndo.result !== next) localUndo = null; // any other change overtakes the offer
+  // Ding when it becomes this device's move: a turn starting, or a prompt such as a discard or trade answer.
+  const actor = state.phase === 'ended' ? null : requiredActor();
+  if (actor !== null && actor !== prevActor) ding();
   if (prevState && prevState.turn.player !== state.turn.player) ui.mode = null;
   if (ui.mode && (state.pending || state.phase !== 'main')) ui.mode = null;
   if (prevKey !== contextKey() && currentModalTag() !== 'gameover') closeModal();
@@ -738,6 +743,7 @@ function beginLocal(options, rolls) {
   const firstHuman = state.players.find((p) => !p.isBot);
   ui.viewer = firstHuman ? firstHuman.id : null;
   if (state.options.passDevice && humans().length >= 2) ui.viewer = null; // force the first hand-off screen
+  if (requiredActor() !== null) ding();
   save();
   render();
   scheduleBots();
@@ -1139,6 +1145,7 @@ function openFullLog() {
 
 function openMenu() {
   const items = [
+    h('button', { class: 'btn btn-wide', onclick: () => { setSoundEnabled(!soundEnabled()); closeModal(); openMenu(); } }, soundEnabled() ? '🔔 Turn sound: on' : '🔕 Turn sound: off'),
     h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); costsModal(); } }, '🏗️ Building costs'),
     h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); rulesModal(); } }, '📖 Rules summary'),
     h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); openFullLog(); } }, '📜 Full log'),
@@ -1248,6 +1255,7 @@ function renderPendingModals() {
 // ---------------------------------------------------------------------------
 
 (function boot() {
+  primeAudio();
   const session = loadSession();
   const linked = urlRoom();
   if (session && (!linked || linked === session.room)) startOnline(null);
@@ -1261,6 +1269,9 @@ window.__catan = {
   },
   get room() {
     return online.room;
+  },
+  get sound() {
+    return soundStats;
   },
   dispatch,
 };
