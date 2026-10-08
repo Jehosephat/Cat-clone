@@ -249,9 +249,42 @@ function incomingTradeOffer(prevState) {
   return Object.keys(t.responses).some((id) => !state.players[id].isBot);
 }
 
+/** A reverse-card flash when someone takes back a move: flies in, holds a beat, flies out. */
+function showUndoFlash(playerName) {
+  let root = document.getElementById('flash-root');
+  if (!root) {
+    root = h('div', { id: 'flash-root', 'aria-hidden': 'true' });
+    document.body.append(root);
+  }
+  clear(root);
+  const card = h('svg:svg', { viewBox: '0 0 120 180', class: 'reverse-card' },
+    h('svg:rect', { x: 3, y: 3, width: 114, height: 174, rx: 12, fill: '#f6f3ea' }),
+    h('svg:rect', { x: 9, y: 9, width: 102, height: 162, rx: 9, fill: '#1d4fb5' }),
+    h('svg:ellipse', { cx: 60, cy: 90, rx: 34, ry: 62, fill: 'none', stroke: '#fff', 'stroke-width': 5, transform: 'rotate(28 60 90)' }),
+    ...[[60, 90, 1], [24, 30, 0.42], [96, 150, 0.42]].map(([cx, cy, k]) =>
+      h('svg:g', { transform: `translate(${cx} ${cy}) scale(${k})` },
+        ...[0, 180].map((rot) =>
+          h('svg:path', {
+            d: 'M -3 20 L -3 -2 L -16 -2 L 6 -26 L 28 -2 L 15 -2 L 15 12 Q 15 22 5 22 Z',
+            transform: `rotate(${rot + 45}) translate(-6 -10)`,
+            fill: '#fff', stroke: '#111', 'stroke-width': 4, 'stroke-linejoin': 'round',
+          }),
+        ),
+      ),
+    ),
+  );
+  const el = h('div', { class: 'undo-flash' }, card, h('div', { class: 'undo-flash-caption' }, `${playerName} takes it back!`));
+  root.append(el);
+  setTimeout(() => el.remove(), 1400);
+}
+
 function announceEvents() {
   const ev = state.lastEvent;
   if (!ev) return;
+  if (ev.type === 'undo') {
+    showUndoFlash(state.players[ev.player].name);
+    return;
+  }
   if (isOnline()) {
     const me = mySeat();
     if (ev.type === 'steal' && ev.resource) {

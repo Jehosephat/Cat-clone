@@ -52,7 +52,7 @@ Notes:
 - Balanced numbers (never place 6 and 8 next to each other)
 - Shuffle harbors
 - Friendly robber (cannot be placed next to players with 2 or fewer points)
-- Undo window: after most actions the player who acted gets a 4-second undo. Trades with other players, dice rolls, card purchases and steals cannot be undone, and an undo is only possible while nobody else has acted since (bots wait out the window)
+- Undo window: after most actions the player who acted gets a 4-second undo (everyone at the table sees a reverse-card flash when it is used). Trades with other players, dice rolls, card purchases and steals cannot be undone, and an undo is only possible while nobody else has acted since (bots wait out the window)
 - Local mode only: pass-and-play privacy screen, and a seed for a reproducible board and dice
 - Sound effects (synthesized, no audio files): a "ding" whenever it becomes your move, a "ka-ching" when another player offers you a trade and a soft blip for chat, with an on/off toggle in the in-game menu
 - Online chat with quick phrases, an unread badge and tap-to-open message toasts

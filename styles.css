@@ -1485,3 +1485,63 @@ h3 {
   font-size: 12px;
   font-weight: 600;
 }
+
+/* Undo flash (reverse card) ------------------------------------------------- */
+#flash-root {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.undo-flash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  animation: reverse-fly 1.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  filter: drop-shadow(0 14px 30px rgba(0, 0, 0, 0.55));
+}
+.reverse-card {
+  width: min(42vw, 180px);
+  height: auto;
+}
+.undo-flash-caption {
+  background: rgba(10, 20, 32, 0.85);
+  color: var(--text);
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+@keyframes reverse-fly {
+  0% {
+    transform: translateY(110vh) rotate(-30deg) scale(0.6);
+    opacity: 0;
+  }
+  22% {
+    transform: translateY(0) rotate(6deg) scale(1.05);
+    opacity: 1;
+  }
+  32% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  72% {
+    transform: translateY(0) rotate(0deg) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-110vh) rotate(25deg) scale(0.7);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .undo-flash {
+    animation: reverse-fade 1.4s ease forwards;
+  }
+  @keyframes reverse-fade {
+    0%, 100% { opacity: 0; }
+    15%, 80% { opacity: 1; }
+  }
+}

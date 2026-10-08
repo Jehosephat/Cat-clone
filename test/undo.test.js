@@ -17,7 +17,7 @@ test('offers are made only for humans and not when the game just ended', () => {
   assert.equal(makeUndoOffer(prev, next, 'acceptTrade', 1, 1000), null);
   const restored = restoreFromOffer(offer, 'Bob');
   assert.notEqual(restored, prev);
-  assert.equal(restored.lastEvent, null);
+  assert.deepEqual(restored.lastEvent, { type: 'undo', player: 1, label: 'city upgrade' });
   assert.equal(restored.log.at(-1).text, 'Bob takes back their city upgrade.');
   assert.equal(prev.log.length, 0);
 });

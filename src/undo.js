@@ -43,10 +43,10 @@ export function makeUndoOffer(prevState, nextState, actionType, player, now) {
   return { state: prevState, player, label: undoLabel(actionType), until: now + UNDO_WINDOW_MS };
 }
 
-/** The state to restore when an offer is taken: a copy with a log line and no stale event. */
+/** The state to restore when an offer is taken: a copy with a log line and an undo event for the UI. */
 export function restoreFromOffer(offer, playerName) {
   const s = structuredClone(offer.state);
-  s.lastEvent = null;
+  s.lastEvent = { type: 'undo', player: offer.player, label: offer.label };
   s.log.push({ turn: s.turn.number, player: offer.player, text: `${playerName} takes back their ${offer.label}.` });
   return s;
 }
