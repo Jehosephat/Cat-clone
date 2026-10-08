@@ -2,6 +2,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { newGame, act, GameError, actingPlayers } from '../src/game.js';
 import { botAction } from '../src/ai.js';
 import { createRollOff, addRoll, needsRoll, pendingRollers, isComplete, rollOrder, describeRollOff } from '../src/rolloff.js';
+import { makeUndoOffer, restoreFromOffer } from '../src/undo.js';
 import { PLAYER_COLORS, DEFAULT_OPTIONS, RESOURCES } from '../src/constants.js';
 import { redactFor } from './redact.js';
 
@@ -84,15 +85,15 @@ export function sanitizeOptions(raw, current = DEFAULT_OPTIONS) {
   const o = { ...current };
   if (!raw || typeof raw !== 'object') return o;
   if (raw.boardLayout === 'random' || raw.boardLayout === 'beginner') o.boardLayout = raw.boardLayout;
-  for (const k of ['randomHarbors', 'balancedNumbers', 'friendlyRobber']) if (typeof raw[k] === 'boolean') o[k] = raw[k];
+  for (const k of ['randomHarbors', 'balancedNumbers', 'friendlyRobber', 'undo']) if (typeof raw[k] === 'boolean') o[k] = raw[k];
   if ([8, 10, 12, 15].includes(raw.targetVP)) o.targetVP = raw.targetVP;
   if ([7, 9].includes(raw.discardLimit)) o.discardLimit = raw.discardLimit;
   return o;
 }
 
 function lobbyOptions() {
-  const { boardLayout, randomHarbors, balancedNumbers, friendlyRobber, targetVP, discardLimit } = DEFAULT_OPTIONS;
-  return { boardLayout, randomHarbors, balancedNumbers, friendlyRobber, targetVP, discardLimit };
+  const { boardLayout, randomHarbors, balancedNumbers, friendlyRobber, targetVP, discardLimit, undo } = DEFAULT_OPTIONS;
+  return { boardLayout, randomHarbors, balancedNumbers, friendlyRobber, targetVP, discardLimit, undo };
 }
 
 /**
@@ -147,6 +148,8 @@ export class RoomManager {
           return this.cancelRollOff(client);
         case 'action':
           return this.action(client, msg);
+        case 'undo':
+          return this.undo(client);
         case 'replaceWithBot':
           return this.replaceWithBot(client, msg);
         case 'restart':
@@ -193,7 +196,7 @@ export class RoomManager {
     this.detach(client);
     if (this.rooms.size >= this.maxRooms) fail('The server is full. Try again later.');
     const code = this.newCode();
-    const room = { code, phase: 'lobby', seats: [], host: null, options: lobbyOptions(), state: null, rolloff: null, seq: 0, botTimer: null, lastActivity: this.now() };
+    const room = { code, phase: 'lobby', seats: [], host: null, options: lobbyOptions(), state: null, rolloff: null, undo: null, seq: 0, botTimer: null, lastActivity: this.now() };
     this.rooms.set(code, room);
     const seat = this.addSeat(room, { name: cleanName(msg.name, 'Player 1'), isBot: false });
     room.host = seat;
@@ -229,6 +232,7 @@ export class RoomManager {
         room.state = structuredClone(room.state);
         room.state.players[idx].isBot = false;
         room.state.log.push({ turn: room.state.turn.number, player: idx, text: `${seat.name} is back and takes over from the bot.` });
+        room.seq += 1;
       }
     }
     this.attach(client, room, seat);
@@ -396,7 +400,7 @@ export class RoomManager {
     const state = room.state;
     if (SELF_ACTIONS.has(action.type)) action.player = seatIdx;
     else if (state.turn.player !== seatIdx) fail("It's not your turn.");
-    this.apply(room, action);
+    this.apply(room, action, seatIdx);
   }
 
   replaceWithBot(client, msg) {
@@ -411,15 +415,41 @@ export class RoomManager {
     room.state = structuredClone(room.state);
     room.state.players[idx].isBot = true;
     room.state.log.push({ turn: room.state.turn.number, player: idx, text: `A bot takes over for ${target.name}.` });
+    room.seq += 1;
     this.broadcast(room);
     this.scheduleBots(room);
   }
 
-  apply(room, action) {
-    room.state = act(room.state, action);
+  /** Apply an action; `by` is the seat of the human who sent it (null for bots), which decides whether an undo is offered. */
+  apply(room, action, by = null) {
+    const prev = room.state;
+    room.state = act(prev, action);
     room.seq += 1;
     room.lastActivity = this.now();
+    const offer = room.options.undo ? makeUndoOffer(prev, room.state, action.type, by, this.now()) : null;
+    room.undo = offer ? { ...offer, seq: room.seq } : null;
     if (room.state.phase === 'ended') this.log(`room ${room.code} finished`);
+    this.broadcast(room);
+    this.scheduleBots(room);
+  }
+
+  /** The open undo offer, if it is still valid for the current state and has not expired. */
+  activeUndo(room) {
+    const u = room.undo;
+    if (!u || u.seq !== room.seq || this.now() > u.until) return null;
+    return u;
+  }
+
+  undo(client) {
+    const room = client.room;
+    if (!room || room.phase !== 'game') fail('No game in progress.');
+    const u = this.activeUndo(room);
+    const idx = room.seats.indexOf(client.seat);
+    if (!u || u.player !== idx) fail('Nothing to undo.');
+    room.state = restoreFromOffer(u, client.seat.name);
+    room.undo = null;
+    room.seq += 1;
+    room.lastActivity = this.now();
     this.broadcast(room);
     this.scheduleBots(room);
   }
@@ -428,11 +458,18 @@ export class RoomManager {
     if (room.botTimer || room.phase !== 'game' || room.state.phase === 'ended') return;
     const bot = this.nextBot(room);
     if (bot === null) return;
+    // While a human may still undo, bots hold off so the undo stays possible.
+    const u = this.activeUndo(room);
+    const delay = u ? u.until - this.now() + 50 : room.state.phase === 'setup' ? Math.round(this.botDelay * 0.7) : this.botDelay;
     room.botTimer = this.schedule(() => {
       room.botTimer = null;
       if (!this.rooms.has(room.code) || room.phase !== 'game') return;
+      if (this.activeUndo(room)) {
+        this.scheduleBots(room); // the window was renewed by another human action; wait again
+        return;
+      }
       this.runBot(room);
-    }, room.state.phase === 'setup' ? Math.round(this.botDelay * 0.7) : this.botDelay);
+    }, delay);
   }
 
   nextBot(room) {
@@ -464,6 +501,7 @@ export class RoomManager {
 
   /** Send every connected player their own view of the room. */
   broadcast(room) {
+    const u = room.phase === 'game' ? this.activeUndo(room) : null;
     room.seats.forEach((seat, idx) => {
       if (seat.clients.size === 0) return;
       const msg = {
@@ -471,6 +509,7 @@ export class RoomManager {
         room: this.publicRoom(room, idx),
         seq: room.seq,
         state: room.state ? redactFor(room.state, idx) : null,
+        undo: u && u.player === idx ? { label: u.label, remainingMs: u.until - this.now() } : null,
       };
       for (const c of seat.clients) c.send(msg);
     });

@@ -84,6 +84,7 @@ export const DEFAULT_OPTIONS = {
   balancedNumbers: false, // no adjacent 6 & 8 tokens
   friendlyRobber: false, // robber can't be placed next to players with 2 or fewer VPs
   discardLimit: 7,
+  undo: true, // offer a short undo window after most actions
   passDevice: true,
   seed: null,
 };

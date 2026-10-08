@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RoomManager, sanitizeAction } from '../server/rooms.js';
 import { redactFor } from '../server/redact.js';
-import { validSettlementVertices, actingPlayers } from '../src/game.js';
+import { validSettlementVertices, validRoadEdges, actingPlayers } from '../src/game.js';
 import { botAction } from '../src/ai.js';
 import { totalResources } from '../src/rules.js';
 import { pendingRollers } from '../src/rolloff.js';
@@ -22,14 +22,28 @@ function fakeClient() {
   };
 }
 
-function manager() {
+function manager({ undo = false } = {}) {
   const timers = [];
+  const clock = { now: 0 };
   // Dice for the roll-off default to 6 - seat, so seat order is turn order unless a test overrides `rm.roll`.
-  const rm = new RoomManager({ schedule: (fn) => (timers.push(fn), fn), cancel: (fn) => timers.splice(timers.indexOf(fn), 1), botDelay: 0, roll: (idx) => 6 - idx });
+  const rm = new RoomManager({
+    schedule: (fn, ms) => (timers.push({ fn, ms }), fn),
+    cancel: (fn) => { const i = timers.findIndex((t) => t.fn === fn); if (i >= 0) timers.splice(i, 1); },
+    botDelay: 0,
+    roll: (idx) => 6 - idx,
+    now: () => clock.now,
+  });
+  rm.clock = clock;
+  rm.timers = timers;
   rm.runTimers = (limit = 100000) => {
     let n = 0;
-    while (timers.length && n++ < limit) timers.shift()();
+    while (timers.length && n++ < limit) {
+      const t = timers.shift();
+      clock.now += t.ms; // fake time advances by each timer's delay
+      t.fn();
+    }
   };
+  rm.undoByDefault = undo;
   return rm;
 }
 
@@ -53,6 +67,7 @@ function lobbyWith(rm, humans = 2, bots = 1) {
   const clients = [];
   const host = fakeClient();
   rm.handle(host, { t: 'create', name: 'Host' });
+  if (!rm.undoByDefault) rm.handle(host, { t: 'setOptions', options: { undo: false } }); // keep older tests' bot timing
   clients.push(host);
   const code = host.last('session').room;
   for (let i = 1; i < humans; i++) {
@@ -357,4 +372,110 @@ test('the host can return a roll-off to the lobby, and a leaving player resets i
   startGame(rm, [host]);
   assert.equal(host.room.phase, 'game');
   assert.equal(host.room.state.players.length, 3);
+});
+
+
+test('undo: offered to the actor for a few seconds, bots wait, and it expires or is overtaken', () => {
+  const rm = manager({ undo: true });
+  const { clients } = lobbyWith(rm, 2, 1);
+  const [host, guest] = clients;
+  assert.equal(host.last('room').room.options.undo, true);
+  startGame(rm, clients);
+  const room = host.room;
+  assert.equal(room.state.turn.player, 0);
+
+  // Host places a settlement: the host gets an offer, the guest does not.
+  const v = validSettlementVertices(room.state, 0, { setup: true })[0];
+  rm.handle(host, { t: 'action', action: { type: 'placeSettlement', vertex: v } });
+  const offer = host.last('room').undo;
+  assert.equal(offer.label, 'settlement placement');
+  assert.equal(offer.remainingMs, 4000);
+  assert.equal(guest.last('room').undo, null);
+  // Only the actor may undo.
+  rm.handle(guest, { t: 'undo' });
+  assert.match(guest.last('error').message, /nothing to undo/i);
+  rm.handle(host, { t: 'undo' });
+  assert.equal(room.state.board.vertices[v].building, null);
+  assert.equal(room.state.setup.step, 'settlement');
+  assert.match(room.state.log.at(-1).text, /Host takes back their settlement placement/);
+  assert.equal(host.last('room').undo, null);
+  // A second undo has nothing to take back.
+  rm.handle(host, { t: 'undo' });
+  assert.match(host.last('error').message, /nothing to undo/i);
+
+  // Place again, then let the window expire: too late.
+  rm.handle(host, { t: 'action', action: { type: 'placeSettlement', vertex: v } });
+  rm.clock.now += 4001;
+  rm.handle(host, { t: 'undo' });
+  assert.match(host.last('error').message, /nothing to undo/i);
+  assert.equal(room.state.board.vertices[v].building.player, 0);
+
+  // Finish the host's placement; the next seat is the guest, so another human action overtakes the offer.
+  const e = validRoadEdges(room.state, 0, { fromVertex: v })[0];
+  rm.handle(host, { t: 'action', action: { type: 'placeRoad', edge: e } });
+  assert.equal(host.last('room').undo.label, 'road placement');
+  assert.equal(room.state.turn.player, 1);
+  const v2 = validSettlementVertices(room.state, 1, { setup: true })[0];
+  rm.handle(guest, { t: 'action', action: { type: 'placeSettlement', vertex: v2 } });
+  rm.handle(host, { t: 'undo' });
+  assert.match(host.last('error').message, /nothing to undo/i);
+  assert.equal(guest.last('room').undo.label, 'settlement placement');
+
+  // Guest finishes: the bot is next, but it must wait out the guest's undo window.
+  const e2 = validRoadEdges(room.state, 1, { fromVertex: v2 })[0];
+  rm.handle(guest, { t: 'action', action: { type: 'placeRoad', edge: e2 } });
+  assert.equal(room.state.turn.player, 2);
+  assert.equal(rm.timers.length, 1);
+  assert.ok(rm.timers[0].ms >= 4000, `bot delay was ${rm.timers[0].ms}`);
+  // The guest changes their mind in time; the bot timer then finds nothing to do for the bot.
+  rm.handle(guest, { t: 'undo' });
+  assert.equal(room.state.turn.player, 1);
+  rm.runTimers(5);
+  assert.equal(room.state.turn.player, 1);
+  rm.handle(guest, { t: 'action', action: { type: 'placeRoad', edge: e2 } });
+  rm.runTimers(5);
+  assert.equal(room.state.board.vertices[validSettlementVertices(room.state, 2, { setup: true })[0]].building, null);
+  // Bot moves happen after the window and never carry an offer.
+  assert.ok(room.state.turn.player !== 2 || room.state.setup.step !== 'settlement' || rm.timers.length > 0);
+});
+
+test('undo: trades with players are never undoable, and the option can be turned off', () => {
+  const rm = manager({ undo: true });
+  const { clients } = lobbyWith(rm, 2, 1);
+  const [host, guest] = clients;
+  startGame(rm, clients);
+  const room = host.room;
+  while (room.state.phase === 'setup') {
+    const pid = actingPlayers(room.state)[0];
+    rm.apply(room, botAction(room.state, pid));
+  }
+  rm.runTimers(0);
+  room.state.turn.player = 0;
+  room.state.turn.rolled = true;
+  room.state.players[0].resources = { brick: 4, lumber: 0, wool: 0, grain: 0, ore: 0 };
+  room.state.players[1].resources = { brick: 0, lumber: 0, wool: 0, grain: 0, ore: 2 };
+  rm.handle(host, { t: 'action', action: { type: 'bankTrade', give: 'brick', get: 'ore' } });
+  assert.equal(host.last('room').undo.label, 'bank trade');
+  rm.handle(host, { t: 'undo' });
+  assert.equal(room.state.players[0].resources.brick, 4);
+  rm.handle(host, { t: 'action', action: { type: 'proposeTrade', offer: { brick: 1 }, request: { ore: 1 } } });
+  assert.equal(host.last('room').undo, null);
+  rm.handle(guest, { t: 'action', action: { type: 'respondTrade', accept: true } });
+  assert.equal(guest.last('room').undo, null);
+  rm.handle(host, { t: 'action', action: { type: 'acceptTrade', partner: 1 } });
+  assert.equal(host.last('room').undo, null);
+  rm.handle(host, { t: 'undo' });
+  assert.match(host.last('error').message, /nothing to undo/i);
+  assert.equal(room.state.players[0].resources.ore, 1);
+
+  const off = manager();
+  const l2 = lobbyWith(off, 1, 2);
+  startGame(off, l2.clients);
+  const r2 = l2.clients[0].room;
+  assert.equal(r2.options.undo, false);
+  const vv = validSettlementVertices(r2.state, 0, { setup: true })[0];
+  off.handle(l2.clients[0], { t: 'action', action: { type: 'placeSettlement', vertex: vv } });
+  assert.equal(l2.clients[0].last('room').undo, null);
+  off.handle(l2.clients[0], { t: 'undo' });
+  assert.match(l2.clients[0].last('error').message, /nothing to undo/i);
 });

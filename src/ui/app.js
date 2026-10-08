@@ -37,6 +37,7 @@ import {
 import { botAction } from '../ai.js';
 import { createRollOff, addRoll, pendingRollers, isComplete, rollOrder, describeRollOff } from '../rolloff.js';
 import { createRng } from '../rng.js';
+import { makeUndoOffer, restoreFromOffer } from '../undo.js';
 import { RESOURCES, RESOURCE_ICON, RESOURCE_LABEL, PLAYER_COLORS, DEFAULT_OPTIONS, COSTS, DEV_CARD_LABEL } from '../constants.js';
 import { longestRoadLength, handSize } from '../rules.js';
 import { createConnection, loadSession, saveSession } from './net.js';
@@ -59,8 +60,12 @@ let net = null;
 let online = freshOnline();
 
 function freshOnline() {
-  return { room: null, seq: -1, status: 'closed', wantRejoin: false };
+  return { room: null, seq: -1, status: 'closed', wantRejoin: false, undo: null };
 }
+
+/** Local-mode undo offer: {state, player, label, until, result} where `result` is the state the offer belongs to. */
+let localUndo = null;
+let undoTimer = null;
 
 // ---------------------------------------------------------------------------
 // Storage helpers
@@ -193,7 +198,12 @@ function dispatch(action) {
     return true;
   }
   try {
-    setState(act(state, action));
+    const prev = state;
+    const next = act(prev, action);
+    const actor = action.player !== undefined ? action.player : prev.turn.player;
+    const offer = prev.options.undo && !prev.players[actor].isBot ? makeUndoOffer(prev, next, action.type, actor, Date.now()) : null;
+    localUndo = offer ? { ...offer, result: next } : null;
+    setState(next);
     return true;
   } catch (e) {
     if (e instanceof GameError) toast(e.message);
@@ -210,6 +220,7 @@ function setState(next) {
   const prevKey = contextKey();
   const prevState = state;
   state = next;
+  if (localUndo && localUndo.result !== next) localUndo = null; // any other change overtakes the offer
   if (prevState && prevState.turn.player !== state.turn.player) ui.mode = null;
   if (ui.mode && (state.pending || state.phase !== 'main')) ui.mode = null;
   if (prevKey !== contextKey() && currentModalTag() !== 'gameover') closeModal();
@@ -250,7 +261,8 @@ function scheduleBots() {
   const bot = actors.find((pid) => state.players[pid].isBot && botAction(state, pid));
   if (bot === undefined) return;
   const token = ++ui.botToken;
-  const delay = state.phase === 'setup' ? 450 : 650;
+  const undoLeft = localUndo ? localUndo.until - Date.now() : 0;
+  const delay = undoLeft > 0 ? undoLeft + 50 : state.phase === 'setup' ? 450 : 650; // bots wait while a human may still undo
   setTimeout(() => {
     if (token !== ui.botToken || !state || isOnline()) return;
     const a = botAction(state, bot);
@@ -314,6 +326,7 @@ function handleRoom(msg) {
   const prevRoom = online.room;
   online.room = msg.room;
   online.wantRejoin = false;
+  online.undo = msg.undo && msg.room.phase === 'game' ? { label: msg.undo.label, until: Date.now() + msg.undo.remainingMs } : null;
   if (msg.room.phase === 'lobby' || msg.room.phase === 'rolloff') {
     if (!prevRoom || prevRoom.phase !== msg.room.phase) {
       closeModal();
@@ -401,6 +414,7 @@ function optionControls(opts, onChange, { readOnly = false } = {}) {
     h('div', { class: 'field' }, h('span', {}, 'Victory points to win'), segRow([8, 10, 12, 15].map((n) => [n, String(n)]), opts.targetVP, (v) => set({ targetVP: v }), { disabled: readOnly })),
     h('div', { class: 'field' }, h('span', {}, 'Discard when holding more than'), segRow([[7, '7 cards'], [9, '9 cards']], opts.discardLimit, (v) => set({ discardLimit: v }), { disabled: readOnly })),
     toggleRow('Friendly robber', 'The robber cannot be placed next to players with 2 or fewer points', opts.friendlyRobber, (v) => set({ friendlyRobber: v }), readOnly),
+    toggleRow('Undo window', 'After most actions, offer a 4-second undo. Trades with other players cannot be undone.', opts.undo, (v) => set({ undo: v }), readOnly),
   ];
 }
 
@@ -832,11 +846,48 @@ function render() {
   });
 }
 
+/** The undo offer this device may take right now, or null. */
+function activeUndo() {
+  const now = Date.now();
+  if (isOnline()) return online.undo && online.undo.until > now ? online.undo : null;
+  if (!localUndo || localUndo.until <= now || localUndo.result !== state) return null;
+  // In pass-and-play the device may already have been handed on.
+  if (state.options.passDevice && humans().length >= 2 && ui.viewer !== localUndo.player) return null;
+  return localUndo;
+}
+
+function takeUndo() {
+  if (isOnline()) {
+    online.undo = null;
+    send({ t: 'undo' });
+    render();
+    return;
+  }
+  const u = activeUndo();
+  if (!u) return;
+  localUndo = null;
+  ui.mode = null;
+  closeModal();
+  setState(restoreFromOffer(u, state.players[u.player].name));
+}
+
+function renderUndoBanner(offer) {
+  const remaining = Math.max(0, offer.until - Date.now());
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => render(), remaining + 30); // slide the banner away when the window closes
+  return h('div', { class: 'undo-banner', role: 'status' },
+    h('button', { class: 'btn btn-primary undo-btn', onclick: takeUndo }, `↩ Undo ${offer.label}`),
+    h('div', { class: 'undo-progress' }, h('div', { class: 'undo-progress-bar', style: { animationDuration: `${remaining}ms` } })),
+  );
+}
+
 function renderGame() {
   const game = h('div', { class: 'game' });
   game.append(renderPlayersBar());
   game.append(h('div', { class: 'board-area' }, renderBoardView()));
   game.append(renderPanel());
+  const undo = activeUndo();
+  if (undo) game.append(renderUndoBanner(undo));
   if (isOnline() && online.status !== 'open') game.append(h('div', { class: 'conn-banner', role: 'status' }, 'Connection lost. Reconnecting…'));
   if (needsPass()) game.append(renderPassOverlay());
   app.append(game);

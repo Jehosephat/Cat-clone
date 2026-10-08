@@ -51,6 +51,7 @@ Notes:
 - Balanced numbers (never place 6 and 8 next to each other)
 - Shuffle harbors
 - Friendly robber (cannot be placed next to players with 2 or fewer points)
+- Undo window: after most actions the player who acted gets a 4-second undo. Trades with other players cannot be undone, and an undo is only possible while nobody else has acted since (bots wait out the window)
 - Local mode only: pass-and-play privacy screen, and a seed for a reproducible board and dice
 
 ## Project layout
@@ -67,6 +68,7 @@ src/board.js        hex geometry, topology (vertices/edges), board generation, h
 src/rules.js        placement validity, longest road, victory points, trade ratios
 src/game.js         game state and all actions (pure, serializable state)
 src/rolloff.js      the opening die roll that decides the turn order
+src/undo.js         undo offers after actions (what can be undone, and restoring the previous state)
 src/ai.js           bot decision making
 src/ui/app.js       screens: home, lobby, game; local and online modes
 src/ui/net.js       WebSocket client with automatic reconnect
