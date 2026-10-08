@@ -233,12 +233,9 @@ function setState(next) {
   const prevKey = contextKey();
   const prevState = state;
   const prevActor = prevState ? requiredActor() : null;
-  const prevFaceDown = prevState && isOnline() && mySeat() !== null ? prevState.players[mySeat()].devCards.filter((c) => c.type === 'hidden').map((c) => c.id) : [];
   state = next;
   if (localUndo && localUndo.result !== next) localUndo = null; // any other change overtakes the offer
-  if (prevFaceDown.length && mySeat() !== null) {
-    for (const c of state.players[mySeat()].devCards) if (prevFaceDown.includes(c.id) && c.type !== 'hidden') toast(`You drew: ${DEV_CARD_LABEL[c.type]}`, 'info');
-  }
+  announceRevealedCards(prevState);
   // Sounds: "ka-ching" when another player's trade offer arrives for someone on this device,
   // otherwise a ding when it becomes this device's move (a turn starting, or a prompt such as a discard).
   const actor = state.phase === 'ended' ? null : requiredActor();
@@ -315,6 +312,14 @@ function announceEvents() {
     if (localUndo && localUndo.result === state && localUndo.label === 'card purchase') pendingReveal = { player: ev.player, card: ev.card };
     else toast(`You drew: ${DEV_CARD_LABEL[ev.card]}`, 'info');
   }
+}
+
+/** Online: a card of mine that was face down in the previous view and is now face up gets its "You drew" toast. */
+function announceRevealedCards(prevState) {
+  if (!prevState || !isOnline() || mySeat() === null || !state.players[mySeat()]) return;
+  const wasFaceDown = new Set(prevState.players[mySeat()].devCards.filter((c) => c.type === 'hidden').map((c) => c.id));
+  if (!wasFaceDown.size) return;
+  for (const c of state.players[mySeat()].devCards) if (wasFaceDown.has(c.id) && c.type !== 'hidden') toast(`You drew: ${DEV_CARD_LABEL[c.type]}`, 'info');
 }
 
 /** The face-down card's identity, shown once the purchase is kept (window closed or dismissed). */
@@ -437,7 +442,9 @@ function handleRoom(msg) {
     online.seq = msg.seq;
     setState(msg.state);
   } else {
+    const prev = state;
     state = msg.state; // same game state, e.g. someone connected or disconnected
+    announceRevealedCards(prev);
     render();
   }
 }
@@ -1502,5 +1509,9 @@ window.__catan = {
   /** Load a saved local game ({state, viewer}) for debugging. */
   load(saved) {
     resumeLocal(saved);
+  },
+  /** Feed a server message to the online handler for debugging. */
+  inject(msg) {
+    onNetMessage(msg);
   },
 };

@@ -464,6 +464,7 @@ export class RoomManager {
         room.undoTimer = null;
         if (!this.rooms.has(room.code) || !room.undo || room.undo.seq !== room.seq) return;
         room.undo = null;
+        room.seq += 1; // the players' views change (a face-down card turns over), so clients must re-read the state
         this.broadcast(room);
         this.scheduleBots(room);
       }, offer.until - this.now() + 10);
@@ -508,6 +509,7 @@ export class RoomManager {
     const idx = room.seats.indexOf(client.seat);
     if (!u || u.player !== idx) return; // nothing to release; not an error worth reporting
     this.clearUndo(room);
+    room.seq += 1;
     this.broadcast(room);
     this.scheduleBots(room);
   }

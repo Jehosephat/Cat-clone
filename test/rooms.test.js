@@ -473,11 +473,21 @@ test('undo: a bought development card stays face down until the window closes, a
   // Buy again and keep it: the card turns face up for the buyer only.
   rm.handle(host, { t: 'action', action: { type: 'buyDevCard' } });
   assert.equal(host.last('room').state.players[0].devCards[0].type, 'hidden');
+  const seqBefore = host.last('room').seq;
   rm.handle(host, { t: 'dismissUndo' });
   const real = room.state.players[0].devCards[0].type;
   assert.notEqual(real, 'hidden');
   assert.equal(host.last('room').state.players[0].devCards[0].type, real);
+  assert.ok(host.last('room').seq > seqBefore, 'keeping the card bumps the sequence so clients re-read the state');
   assert.equal(guest.last('room').state.players[0].devCards[0].type, 'hidden');
+  // Letting the window run out does the same.
+  room.state.players[0].resources = { brick: 0, lumber: 0, wool: 1, grain: 1, ore: 1 };
+  rm.handle(host, { t: 'action', action: { type: 'buyDevCard' } });
+  assert.equal(host.last('room').state.players[0].devCards[1].type, 'hidden');
+  const seqOpen = host.last('room').seq;
+  rm.runTimers(5);
+  assert.ok(host.last('room').seq > seqOpen);
+  assert.notEqual(host.last('room').state.players[0].devCards[1].type, 'hidden');
 });
 
 test('undo: trades with players are never undoable, and the option can be turned off', () => {
