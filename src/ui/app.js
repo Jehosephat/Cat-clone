@@ -414,7 +414,7 @@ function optionControls(opts, onChange, { readOnly = false } = {}) {
     h('div', { class: 'field' }, h('span', {}, 'Victory points to win'), segRow([8, 10, 12, 15].map((n) => [n, String(n)]), opts.targetVP, (v) => set({ targetVP: v }), { disabled: readOnly })),
     h('div', { class: 'field' }, h('span', {}, 'Discard when holding more than'), segRow([[7, '7 cards'], [9, '9 cards']], opts.discardLimit, (v) => set({ discardLimit: v }), { disabled: readOnly })),
     toggleRow('Friendly robber', 'The robber cannot be placed next to players with 2 or fewer points', opts.friendlyRobber, (v) => set({ friendlyRobber: v }), readOnly),
-    toggleRow('Undo window', 'After most actions, offer a 4-second undo. Trades with other players cannot be undone.', opts.undo, (v) => set({ undo: v }), readOnly),
+    toggleRow('Undo window', 'After most actions, offer a 4-second undo. Trades, dice rolls, card purchases and steals cannot be undone.', opts.undo, (v) => set({ undo: v }), readOnly),
   ];
 }
 

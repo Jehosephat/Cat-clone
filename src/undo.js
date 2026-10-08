@@ -1,10 +1,11 @@
 // Undo offers: after most actions the acting player may take it back for a few seconds,
 // as long as nobody else has acted since. Player-to-player trades involve other people's
-// decisions, so they are never undoable.
+// decisions, and dice rolls, card purchases and steals reveal chance outcomes, so none of
+// those can be undone.
 
 export const UNDO_WINDOW_MS = 4000;
 
-const NOT_UNDOABLE = new Set(['proposeTrade', 'respondTrade', 'acceptTrade', 'cancelTrade']);
+const NOT_UNDOABLE = new Set(['proposeTrade', 'respondTrade', 'acceptTrade', 'cancelTrade', 'roll', 'buyDevCard', 'steal']);
 
 export function isUndoable(actionType) {
   return !NOT_UNDOABLE.has(actionType);
@@ -16,11 +17,8 @@ const LABELS = {
   buildRoad: 'road',
   buildSettlement: 'settlement',
   buildCity: 'city upgrade',
-  buyDevCard: 'card purchase',
-  roll: 'dice roll',
   discard: 'discard',
   moveRobber: 'robber move',
-  steal: 'steal',
   playDevCard: 'card play',
   bankTrade: 'bank trade',
   endTurn: 'end of turn',
