@@ -7,7 +7,7 @@ const PREF_KEY = 'catan-sound-v1';
 let ctx = null;
 let enabled = true;
 let primed = false;
-export const stats = { dings: 0, kachings: 0, played: 0 };
+export const stats = { dings: 0, kachings: 0, blips: 0, played: 0 };
 
 try {
   enabled = localStorage.getItem(PREF_KEY) !== 'off';
@@ -144,5 +144,22 @@ export function kaching() {
     [1250, 0.25, 0.6],
   ]);
   vibrate([40, 40, 40]);
+  return true;
+}
+
+/** A quiet, short tick for an incoming chat message. */
+export function blip() {
+  stats.blips += 1;
+  const c = readyContext();
+  if (!c) return false;
+  stats.played += 1;
+  const t0 = c.currentTime;
+  const master = c.createGain();
+  master.gain.value = 0.1;
+  master.connect(c.destination);
+  bell(c, master, t0, [
+    [1320, 1.0, 0.12],
+    [1980, 0.4, 0.08],
+  ]);
   return true;
 }

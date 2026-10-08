@@ -27,6 +27,7 @@ Notes:
 - **Hidden information stays hidden.** Each player receives a redacted copy of the state (`server/redact.js`): opponents' resource and development cards are reduced to counts, the development deck order is hidden, and the RNG seed and state are never sent, so dice and steals cannot be predicted. Everything is revealed when the game ends.
 - **Reconnects.** Each seat has a secret token stored in the browser. Refreshing the page or losing the connection reconnects to the same seat automatically. If a player is gone, anyone at the table can let a bot play for them from the menu; the player takes the seat back when they return.
 - **Bots** run on the server, so a host can play against bots online, or mix friends and bots.
+- **Chat.** A room chat in the lobby, the roll-off and the game, kept for the room's lifetime (200 messages) and replayed on reconnect. Messages are sanitized and limited to 280 characters.
 - **Hardening.** Messages are size-limited and rate-limited, action payloads are sanitized to known fields, and the HTTP server only serves the page, stylesheet and client modules.
 
 ## Features
@@ -53,7 +54,8 @@ Notes:
 - Friendly robber (cannot be placed next to players with 2 or fewer points)
 - Undo window: after most actions the player who acted gets a 4-second undo. Trades with other players, dice rolls, card purchases and steals cannot be undone, and an undo is only possible while nobody else has acted since (bots wait out the window)
 - Local mode only: pass-and-play privacy screen, and a seed for a reproducible board and dice
-- Sound effects (synthesized, no audio files): a "ding" whenever it becomes your move and a "ka-ching" when another player offers you a trade, with an on/off toggle in the in-game menu
+- Sound effects (synthesized, no audio files): a "ding" whenever it becomes your move, a "ka-ching" when another player offers you a trade and a soft blip for chat, with an on/off toggle in the in-game menu
+- Online chat with quick phrases, an unread badge and tap-to-open message toasts
 
 ## Project layout
 

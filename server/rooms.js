@@ -11,6 +11,8 @@ const CODE_LENGTH = 4;
 const MAX_SEATS = 4;
 const MIN_SEATS = 3;
 const NAME_MAX = 16;
+const CHAT_MAX_LENGTH = 280;
+const CHAT_HISTORY = 200;
 const COLOR_IDS = PLAYER_COLORS.map((c) => c.id);
 
 // Actions a non-current player may take for themselves; everything else is reserved for the current player.
@@ -154,6 +156,8 @@ export class RoomManager {
           return this.replaceWithBot(client, msg);
         case 'restart':
           return this.restart(client);
+        case 'chat':
+          return this.chat(client, msg);
         case 'ping':
           return client.send({ t: 'pong' });
         default:
@@ -196,7 +200,7 @@ export class RoomManager {
     this.detach(client);
     if (this.rooms.size >= this.maxRooms) fail('The server is full. Try again later.');
     const code = this.newCode();
-    const room = { code, phase: 'lobby', seats: [], host: null, options: lobbyOptions(), state: null, rolloff: null, undo: null, seq: 0, botTimer: null, lastActivity: this.now() };
+    const room = { code, phase: 'lobby', seats: [], host: null, options: lobbyOptions(), state: null, rolloff: null, undo: null, chat: [], chatId: 0, seq: 0, botTimer: null, lastActivity: this.now() };
     this.rooms.set(code, room);
     const seat = this.addSeat(room, { name: cleanName(msg.name, 'Player 1'), isBot: false });
     room.host = seat;
@@ -389,6 +393,25 @@ export class RoomManager {
   }
 
   // -------------------------------------------------------------------------
+  // Chat
+  // -------------------------------------------------------------------------
+
+  /** A chat line from a seated player, kept for the life of the room and sent to everyone at the table. */
+  chat(client, msg) {
+    const room = client.room;
+    if (!room) fail('You are not in a room.');
+    const text = typeof msg.text === 'string' ? msg.text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim() : '';
+    if (!text) fail('Type a message first.');
+    if (text.length > CHAT_MAX_LENGTH) fail(`Messages can be up to ${CHAT_MAX_LENGTH} characters.`);
+    const seat = client.seat;
+    const message = { id: ++room.chatId, seat: room.seats.indexOf(seat), name: seat.name, text, at: this.now() };
+    room.chat.push(message);
+    if (room.chat.length > CHAT_HISTORY) room.chat.splice(0, room.chat.length - CHAT_HISTORY);
+    room.lastActivity = this.now();
+    for (const s of room.seats) for (const c of s.clients) c.send({ t: 'chat', message });
+  }
+
+  // -------------------------------------------------------------------------
   // Game
   // -------------------------------------------------------------------------
 
@@ -561,6 +584,7 @@ export class RoomManager {
     seat.clients.add(client);
     room.lastActivity = this.now();
     client.send({ t: 'session', room: room.code, token: seat.token });
+    client.send({ t: 'chatHistory', messages: room.chat });
   }
 
   /** Disconnect a client from its current room without notifying it (used before joining another). */

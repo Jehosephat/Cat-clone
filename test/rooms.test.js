@@ -479,3 +479,39 @@ test('undo: trades with players are never undoable, and the option can be turned
   off.handle(l2.clients[0], { t: 'undo' });
   assert.match(l2.clients[0].last('error').message, /nothing to undo/i);
 });
+
+
+test('chat: messages reach every seat, history is replayed on rejoin, and bad input is rejected', () => {
+  const rm = manager();
+  const { code, clients } = lobbyWith(rm, 2, 1);
+  const [host, guest] = clients;
+  assert.deepEqual(guest.last('chatHistory').messages, []);
+  const outsider = fakeClient();
+  rm.handle(outsider, { t: 'chat', text: 'hi' });
+  assert.match(outsider.last('error').message, /not in a room/);
+  rm.handle(host, { t: 'chat', text: '   ' });
+  assert.match(host.last('error').message, /type a message/i);
+  rm.handle(host, { t: 'chat', text: 'x'.repeat(281) });
+  assert.match(host.last('error').message, /280/);
+  rm.handle(host, { t: 'chat', text: '  Anyone\u0007 have   ore?  ' });
+  const m = guest.last('chat').message;
+  assert.equal(m.text, 'Anyone have ore?');
+  assert.equal(m.seat, 0);
+  assert.equal(m.name, 'Host');
+  assert.equal(host.last('chat').message.id, m.id);
+  rm.handle(guest, { t: 'chat', text: 'Nope, sorry' });
+  assert.equal(host.last('chat').message.text, 'Nope, sorry');
+  // Chat keeps working once the game is on, and a reconnecting player gets the history.
+  startGame(rm, clients);
+  rm.handle(guest, { t: 'chat', text: 'gl hf' });
+  assert.equal(host.last('chat').message.text, 'gl hf');
+  const token = guest.last('session').token;
+  rm.disconnect(guest);
+  const back = fakeClient();
+  rm.handle(back, { t: 'rejoin', room: code, token });
+  assert.deepEqual(back.last('chatHistory').messages.map((x) => x.text), ['Anyone have ore?', 'Nope, sorry', 'gl hf']);
+  // History is capped.
+  for (let i = 0; i < 230; i++) rm.handle(host, { t: 'chat', text: `m${i}` });
+  assert.equal(host.room.chat.length, 200);
+  assert.equal(host.room.chat[0].text, 'm30');
+});

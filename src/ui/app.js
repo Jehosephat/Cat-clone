@@ -38,7 +38,7 @@ import { botAction } from '../ai.js';
 import { createRollOff, addRoll, pendingRollers, isComplete, rollOrder, describeRollOff } from '../rolloff.js';
 import { createRng } from '../rng.js';
 import { makeUndoOffer, restoreFromOffer } from '../undo.js';
-import { ding, kaching, primeAudio, soundEnabled, setSoundEnabled, stats as soundStats } from './sound.js';
+import { ding, kaching, blip, primeAudio, soundEnabled, setSoundEnabled, stats as soundStats } from './sound.js';
 import { RESOURCES, RESOURCE_ICON, RESOURCE_LABEL, PLAYER_COLORS, DEFAULT_OPTIONS, COSTS, DEV_CARD_LABEL } from '../constants.js';
 import { longestRoadLength, handSize } from '../rules.js';
 import { createConnection, loadSession, saveSession } from './net.js';
@@ -61,8 +61,10 @@ let net = null;
 let online = freshOnline();
 
 function freshOnline() {
-  return { room: null, seq: -1, status: 'closed', wantRejoin: false, undo: null };
+  return { room: null, seq: -1, status: 'closed', wantRejoin: false, undo: null, chat: [], chatUnread: 0 };
 }
+
+const QUICK_CHAT = ['👋 Hi!', 'Anyone have ore?', 'Trade?', 'Nice move!', 'Good game!', '😄', '😱', '👍'];
 
 /** Local-mode undo offer: {state, player, label, until, result} where `result` is the state the offer belongs to. */
 let localUndo = null;
@@ -126,13 +128,13 @@ function setUrlRoom(code) {
 // ---------------------------------------------------------------------------
 
 function toast(msg, kind = 'error') {
-  const el = h('div', { class: `toast toast-${kind}` }, msg);
+  const el = h('div', { class: `toast toast-${kind}`, onclick: kind === 'chat' ? () => { el.remove(); toggleChat(true); } : null }, msg);
   toastRoot.append(el);
   setTimeout(() => el.classList.add('show'), 10);
   setTimeout(() => {
     el.classList.remove('show');
     setTimeout(() => el.remove(), 300);
-  }, 2800);
+  }, kind === 'chat' ? 4000 : 2800);
 }
 
 function isOnline() {
@@ -333,6 +335,13 @@ function onNetMessage(msg) {
       leaveOnline({ notify: false });
       toast(msg.message);
       break;
+    case 'chatHistory':
+      online.chat = Array.isArray(msg.messages) ? msg.messages : [];
+      render();
+      break;
+    case 'chat':
+      receiveChat(msg.message);
+      break;
     default:
       break;
   }
@@ -365,6 +374,65 @@ function handleRoom(msg) {
     state = msg.state; // same game state, e.g. someone connected or disconnected
     render();
   }
+}
+
+function receiveChat(message) {
+  if (!message) return;
+  online.chat.push(message);
+  if (online.chat.length > 200) online.chat.splice(0, online.chat.length - 200);
+  const mine = message.seat === mySeat();
+  if (!mine && !ui.chatOpen) {
+    online.chatUnread += 1;
+    toast(`💬 ${message.name}: ${message.text.length > 90 ? message.text.slice(0, 90) + '…' : message.text}`, 'chat');
+    blip();
+  }
+  render();
+}
+
+function sendChat(text) {
+  const t = (text || '').trim();
+  if (!t) return;
+  send({ t: 'chat', text: t.slice(0, 280) });
+}
+
+function toggleChat(open = !ui.chatOpen) {
+  ui.chatOpen = open;
+  if (open) online.chatUnread = 0;
+  render();
+}
+
+function chatButton(extraClass = '') {
+  const n = online.chatUnread;
+  return h('button', { class: `btn chat-btn ${extraClass}`, 'aria-label': n ? `Chat, ${n} unread` : 'Chat', onclick: () => toggleChat(true) }, '💬', n ? h('span', { class: 'chat-badge' }, n > 9 ? '9+' : n) : null);
+}
+
+function renderChatDrawer() {
+  const me = mySeat();
+  const seats = online.room ? online.room.seats : [];
+  const list = h('div', { class: 'chat-list', role: 'log', 'aria-live': 'polite' });
+  if (!online.chat.length) list.append(h('p', { class: 'muted small chat-empty' }, 'No messages yet. Say hi!'));
+  let lastSeat = null;
+  for (const m of online.chat) {
+    const own = m.seat === me;
+    const color = seats[m.seat] ? colorHex({ players: [{ color: seats[m.seat].color }] }, 0) : '#999';
+    const row = h('div', { class: `chat-msg ${own ? 'own' : ''}` });
+    if (m.seat !== lastSeat && !own) row.append(h('div', { class: 'chat-name' }, h('span', { class: 'dot', style: { background: color } }), m.name));
+    row.append(h('div', { class: 'chat-bubble' }, m.text));
+    list.append(row);
+    lastSeat = m.seat;
+  }
+  const input = h('input', {
+    type: 'text', class: 'name-input chat-input', placeholder: 'Message…', maxlength: 280, 'data-keep': 'chat-input', 'aria-label': 'Chat message', autocomplete: 'off', enterkeyhint: 'send',
+    onkeydown: (e) => { if (e.key === 'Enter') { sendChat(input.value); input.value = ''; } },
+  });
+  const drawer = h('div', { class: 'chat-drawer', role: 'dialog', 'aria-label': 'Chat' },
+    h('div', { class: 'chat-head' }, h('strong', {}, '💬 Chat'), h('span', { class: 'muted small' }, online.status === 'open' ? '' : 'reconnecting…'), h('button', { class: 'btn small', 'aria-label': 'Close chat', onclick: () => toggleChat(false) }, '✕')),
+    list,
+    h('div', { class: 'chat-quick' }, QUICK_CHAT.map((q) => h('button', { class: 'chip', onclick: () => sendChat(q) }, q))),
+    h('div', { class: 'chat-compose' }, input, h('button', { class: 'btn btn-primary', 'aria-label': 'Send', onclick: () => { sendChat(input.value); input.value = ''; input.focus(); } }, 'Send')),
+  );
+  requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+  return drawer;
 }
 
 function startOnline(firstMessage) {
@@ -567,6 +635,7 @@ function renderLobby() {
     h('div', { class: 'lobby-head' },
       h('div', {}, h('div', { class: 'muted small' }, 'Room code'), h('div', { class: 'room-code' }, room.code)),
       h('div', { class: 'lobby-share' },
+        chatButton(),
         h('button', { class: 'btn', onclick: copyLink }, '🔗 Copy link'),
         navigator.share ? h('button', { class: 'btn', onclick: () => navigator.share({ title: 'Join my Settlers game', text: `Join my game with code ${room.code}`, url: shareLink() }).catch(() => {}) }, 'Share') : null,
       ),
@@ -817,6 +886,7 @@ function renderOnlineRollOff() {
     note: online.status !== 'open' ? 'Reconnecting…' : null,
     footer: [
       isHost ? h('button', { class: 'btn', onclick: () => send({ t: 'cancelRollOff' }) }, '← Back to lobby') : h('div', { class: 'waiting' }, 'Waiting for everyone to roll…'),
+      chatButton(),
       h('button', { class: 'btn', onclick: () => leaveOnline() }, 'Leave'),
     ],
   });
@@ -854,6 +924,7 @@ function render() {
       else if (online.room.phase === 'rolloff' && online.room.rolloff) app.append(renderOnlineRollOff());
       else if (state) renderGame();
       else app.append(renderConnecting());
+      if (online.room && ui.chatOpen) app.append(renderChatDrawer());
       return;
     }
     if (mode === 'local' && state) renderGame();
@@ -946,6 +1017,7 @@ function renderPlayersBar() {
     );
     bar.append(chip);
   }
+  if (isOnline()) bar.append(chatButton('icon-btn'));
   bar.append(h('button', { class: 'btn icon-btn menu-btn', 'aria-label': 'Menu', onclick: openMenu }, '☰'));
   return bar;
 }
