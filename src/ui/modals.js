@@ -250,7 +250,7 @@ export function tradeModal(state, pid, dispatch) {
   render();
 }
 
-export function gameOverModal(state, onNewGame, onReview, newGameLabel = 'New game') {
+export function gameOverModal(state, onNewGame, onReview, newGameLabel = 'New game', onStats = null) {
   const ranking = state.players
     .map((p) => ({ p, vp: countVictoryPoints(state, p.id) }))
     .sort((a, b) => b.vp - a.vp);
@@ -265,8 +265,9 @@ export function gameOverModal(state, onNewGame, onReview, newGameLabel = 'New ga
     ),
     actions: [
       { label: 'Review board', onClick: onReview },
+      onStats ? { label: '🎲 Dice stats', onClick: onStats } : null,
       { label: newGameLabel, onClick: onNewGame, primary: true },
-    ],
+    ].filter(Boolean),
     dismissible: false,
     tag: 'gameover',
   });

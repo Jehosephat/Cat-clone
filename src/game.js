@@ -120,6 +120,8 @@ export function newGame(userOptions = {}) {
     winner: null,
     log: [],
     lastEvent: null,
+    // Dice statistics: counts of each total (index = total, 2..12), overall and per player.
+    stats: { rolls: new Array(13).fill(0), playerRolls: players.map(() => new Array(13).fill(0)) },
   };
   log(state, 'Game started. Place your first settlement and road.');
   return state;
@@ -456,6 +458,9 @@ const handlers = {
     state.turn.rolled = true;
     state.turn.dice = [d1, d2];
     const pid = state.turn.player;
+    if (!state.stats) state.stats = { rolls: new Array(13).fill(0), playerRolls: state.players.map(() => new Array(13).fill(0)) };
+    state.stats.rolls[total] += 1;
+    state.stats.playerRolls[pid][total] += 1;
     log(state, `${pname(state, pid)} rolls ${total} (${d1} + ${d2}).`, pid);
     if (total === 7) {
       state.lastEvent = { type: 'seven' };

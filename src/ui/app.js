@@ -39,6 +39,7 @@ import { createRollOff, addRoll, pendingRollers, isComplete, rollOrder, describe
 import { createRng } from '../rng.js';
 import { makeUndoOffer, restoreFromOffer } from '../undo.js';
 import { ding, kaching, blip, primeAudio, soundEnabled, setSoundEnabled, stats as soundStats } from './sound.js';
+import { renderDiceStats } from './dice-chart.js';
 import { RESOURCES, RESOURCE_ICON, RESOURCE_LABEL, PLAYER_COLORS, DEFAULT_OPTIONS, COSTS, DEV_CARD_LABEL } from '../constants.js';
 import { longestRoadLength, handSize } from '../rules.js';
 import { createConnection, loadSession, saveSession } from './net.js';
@@ -1233,6 +1234,7 @@ function openMenu() {
     h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); rulesModal(); } }, '📖 Rules summary'),
     h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); openFullLog(); } }, '📜 Full log'),
   ];
+  if (state.phase === 'ended') items.push(h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); openDiceStats(); } }, '🎲 Dice stats'));
   if (isOnline()) {
     const room = online.room;
     items.unshift(h('div', { class: 'menu-room' }, h('span', { class: 'muted small' }, 'Room'), h('strong', { class: 'room-code small' }, room.code), h('button', { class: 'btn small', onclick: copyLink }, '🔗 Copy link')));
@@ -1286,13 +1288,25 @@ function endGameButton() {
   return h('button', { class: 'btn', onclick: () => leaveOnline() }, 'Leave');
 }
 
+function openDiceStats() {
+  showModal({
+    title: 'Dice statistics',
+    className: 'modal-wide',
+    body: renderDiceStats(state),
+    actions: [
+      state.phase === 'ended' ? { label: 'Back to results', onClick: () => { closeModal(); openGameOver(); } } : null,
+      { label: 'Close', onClick: closeModal },
+    ].filter(Boolean),
+  });
+}
+
 function openGameOver() {
   if (!isOnline()) {
-    gameOverModal(state, newLocalGame, closeModal);
+    gameOverModal(state, newLocalGame, closeModal, 'New game', openDiceStats);
     return;
   }
-  if (online.room.host === mySeat()) gameOverModal(state, () => { closeModal(); send({ t: 'restart' }); }, closeModal, 'Play again');
-  else gameOverModal(state, () => leaveOnline(), closeModal, 'Leave');
+  if (online.room.host === mySeat()) gameOverModal(state, () => { closeModal(); send({ t: 'restart' }); }, closeModal, 'Play again', openDiceStats);
+  else gameOverModal(state, () => leaveOnline(), closeModal, 'Leave', openDiceStats);
 }
 
 function renderPassOverlay() {
@@ -1357,4 +1371,8 @@ window.__catan = {
     return soundStats;
   },
   dispatch,
+  /** Load a saved local game ({state, viewer}) for debugging. */
+  load(saved) {
+    resumeLocal(saved);
+  },
 };

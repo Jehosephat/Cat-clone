@@ -56,6 +56,7 @@ Notes:
 - Local mode only: pass-and-play privacy screen, and a seed for a reproducible board and dice
 - Sound effects (synthesized, no audio files): a "ding" whenever it becomes your move, a "ka-ching" when another player offers you a trade and a soft blip for chat, with an on/off toggle in the in-game menu
 - Online chat with quick phrases, an unread badge and tap-to-open message toasts
+- Dice statistics at the end of a game: every total rolled against what the odds predicted, sevens per player, and a table view
 
 ## Project layout
 
@@ -76,6 +77,7 @@ src/ai.js           bot decision making
 src/ui/app.js       screens: home, lobby, game; local and online modes
 src/ui/net.js       WebSocket client with automatic reconnect
 src/ui/sound.js     Web Audio sound effects (turn ding, trade ka-ching)
+src/ui/dice-chart.js end-of-game dice distribution chart and table
 src/ui/             board SVG rendering, dialogs, DOM helper
 test/               node:test suites for the board, rules, engine, bots and multiplayer rooms
 ```

@@ -406,3 +406,23 @@ test('saved games without a turn order still advance through setup', () => {
   }
   assert.deepEqual(seen, [0, 1, 2, 2, 1, 0]);
 });
+
+
+test('dice totals are tallied overall and per player', () => {
+  let s = finishedSetup();
+  assert.equal(s.stats.rolls.reduce((a, b) => a + b, 0), 0);
+  s = rollExactly(s, 8);
+  assert.equal(s.stats.rolls[8], 1);
+  assert.equal(s.stats.playerRolls[0][8], 1);
+  s = act(s, { type: 'endTurn' });
+  s = rollExactly(s, 8);
+  assert.equal(s.stats.rolls[8], 2);
+  assert.equal(s.stats.playerRolls[1][8], 1);
+  assert.equal(s.stats.playerRolls[0][8], 1);
+  // Older saves without stats start counting from the next roll.
+  delete s.stats;
+  s = act(s, { type: 'endTurn' });
+  s = rollExactly(s, 5);
+  assert.equal(s.stats.rolls[5], 1);
+  assert.equal(s.stats.rolls.reduce((a, b) => a + b, 0), 1);
+});
