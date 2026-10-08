@@ -39,7 +39,7 @@ import { createRollOff, addRoll, pendingRollers, isComplete, rollOrder, describe
 import { createRng } from '../rng.js';
 import { makeUndoOffer, restoreFromOffer } from '../undo.js';
 import { ding, kaching, blip, primeAudio, soundEnabled, setSoundEnabled, stats as soundStats } from './sound.js';
-import { renderDiceStats } from './dice-chart.js';
+import { renderGameStats } from './stats-charts.js';
 import { RESOURCES, RESOURCE_ICON, RESOURCE_LABEL, PLAYER_COLORS, DEFAULT_OPTIONS, COSTS, DEV_CARD_LABEL } from '../constants.js';
 import { longestRoadLength, handSize } from '../rules.js';
 import { createConnection, loadSession, saveSession } from './net.js';
@@ -1234,7 +1234,7 @@ function openMenu() {
     h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); rulesModal(); } }, '📖 Rules summary'),
     h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); openFullLog(); } }, '📜 Full log'),
   ];
-  if (state.phase === 'ended') items.push(h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); openDiceStats(); } }, '🎲 Dice stats'));
+  if (state.phase === 'ended') items.push(h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); openDiceStats(); } }, '📊 Game stats'));
   if (isOnline()) {
     const room = online.room;
     items.unshift(h('div', { class: 'menu-room' }, h('span', { class: 'muted small' }, 'Room'), h('strong', { class: 'room-code small' }, room.code), h('button', { class: 'btn small', onclick: copyLink }, '🔗 Copy link')));
@@ -1290,9 +1290,9 @@ function endGameButton() {
 
 function openDiceStats() {
   showModal({
-    title: 'Dice statistics',
+    title: 'Game statistics',
     className: 'modal-wide',
-    body: renderDiceStats(state),
+    body: renderGameStats(state),
     actions: [
       state.phase === 'ended' ? { label: 'Back to results', onClick: () => { closeModal(); openGameOver(); } } : null,
       { label: 'Close', onClick: closeModal },

@@ -1463,3 +1463,25 @@ h3 {
   display: flex;
   justify-content: flex-end;
 }
+
+.stats-heading {
+  margin: 14px 0 6px;
+  font-size: 1.05em;
+}
+.stats-heading:first-child {
+  margin-top: 0;
+}
+.stat-value.small-value {
+  font-size: 1.15em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.production-chart {
+  background: transparent;
+}
+.dice-chart .chart-name {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}

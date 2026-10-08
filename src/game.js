@@ -120,11 +120,29 @@ export function newGame(userOptions = {}) {
     winner: null,
     log: [],
     lastEvent: null,
-    // Dice statistics: counts of each total (index = total, 2..12), overall and per player.
-    stats: { rolls: new Array(13).fill(0), playerRolls: players.map(() => new Array(13).fill(0)) },
+    stats: freshStats(players.length),
   };
   log(state, 'Game started. Place your first settlement and road.');
   return state;
+}
+
+/** Game statistics: dice totals (index = total, 2..12) overall and per player, and resources produced per player. */
+function freshStats(n) {
+  return {
+    rolls: new Array(13).fill(0),
+    playerRolls: Array.from({ length: n }, () => new Array(13).fill(0)),
+    production: Array.from({ length: n }, () => emptyResources()), // received from dice production
+    robbed: Array.from({ length: n }, () => emptyResources()), // production blocked by the robber
+  };
+}
+
+/** Make sure a (possibly older) state carries every statistic. */
+function ensureStats(state) {
+  const n = state.players.length;
+  const fresh = freshStats(n);
+  if (!state.stats) state.stats = fresh;
+  for (const k of Object.keys(fresh)) if (!state.stats[k]) state.stats[k] = fresh[k];
+  return state.stats;
 }
 
 /** A permutation of 0..n-1 giving the seating/turn order, or the identity when absent or invalid. */
@@ -300,16 +318,23 @@ function placeSettlementInternal(state, playerId, vertexKey) {
 }
 
 function distributeResources(state, roll) {
+  const stats = ensureStats(state);
   const demand = {}; // resource -> {player -> n}
   for (const hex of state.board.hexes) {
-    if (hex.number !== roll || hex.id === state.board.robberHex) continue;
+    if (hex.number !== roll) continue;
     const res = hexResource(hex);
     if (!res) continue;
+    const blocked = hex.id === state.board.robberHex;
     for (const vk of hex.vertices) {
       const b = state.board.vertices[vk].building;
       if (!b) continue;
+      const n = b.type === 'city' ? 2 : 1;
+      if (blocked) {
+        stats.robbed[b.player][res] += n;
+        continue;
+      }
       demand[res] = demand[res] || {};
-      demand[res][b.player] = (demand[res][b.player] || 0) + (b.type === 'city' ? 2 : 1);
+      demand[res][b.player] = (demand[res][b.player] || 0) + n;
     }
   }
   const gained = state.players.map(() => emptyResources());
@@ -328,6 +353,7 @@ function distributeResources(state, roll) {
   }
   gained.forEach((g, pid) => {
     if (totalResources(g) > 0) log(state, `${pname(state, pid)} receives ${resourceListText(g)}.`, pid);
+    for (const r of RESOURCES) stats.production[pid][r] += g[r];
   });
   state.lastEvent = { type: 'production', roll, gained };
 }
@@ -458,9 +484,9 @@ const handlers = {
     state.turn.rolled = true;
     state.turn.dice = [d1, d2];
     const pid = state.turn.player;
-    if (!state.stats) state.stats = { rolls: new Array(13).fill(0), playerRolls: state.players.map(() => new Array(13).fill(0)) };
-    state.stats.rolls[total] += 1;
-    state.stats.playerRolls[pid][total] += 1;
+    const stats = ensureStats(state);
+    stats.rolls[total] += 1;
+    stats.playerRolls[pid][total] += 1;
     log(state, `${pname(state, pid)} rolls ${total} (${d1} + ${d2}).`, pid);
     if (total === 7) {
       state.lastEvent = { type: 'seven' };

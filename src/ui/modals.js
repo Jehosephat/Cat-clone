@@ -265,7 +265,7 @@ export function gameOverModal(state, onNewGame, onReview, newGameLabel = 'New ga
     ),
     actions: [
       { label: 'Review board', onClick: onReview },
-      onStats ? { label: '🎲 Dice stats', onClick: onStats } : null,
+      onStats ? { label: '📊 Stats', onClick: onStats } : null,
       { label: newGameLabel, onClick: onNewGame, primary: true },
     ].filter(Boolean),
     dismissible: false,

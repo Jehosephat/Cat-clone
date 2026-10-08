@@ -426,3 +426,29 @@ test('dice totals are tallied overall and per player', () => {
   assert.equal(s.stats.rolls[5], 1);
   assert.equal(s.stats.rolls.reduce((a, b) => a + b, 0), 1);
 });
+
+
+test('resource production and robber-blocked production are tallied per player', () => {
+  let s = finishedSetup();
+  const hex = s.board.hexes.find((h) => h.number && h.vertices.some((vk) => s.board.vertices[vk].building));
+  const vk = hex.vertices.find((k) => s.board.vertices[k].building);
+  const owner = s.board.vertices[vk].building.player;
+  const res = { hills: 'brick', forest: 'lumber', pasture: 'wool', fields: 'grain', mountains: 'ore' }[hex.terrain];
+  for (const h of s.board.hexes) if (h.id !== hex.id && h.number === hex.number) h.number = null; // isolate the hex
+  s.board.vertices[vk].building.type = 'city';
+  s.board.robberHex = s.board.hexes.find((h) => h.terrain === 'desert').id;
+  const after = rollExactly(s, hex.number);
+  assert.equal(after.stats.production[owner][res], 2);
+  assert.equal(after.stats.robbed[owner][res], 0);
+  // With the robber on the hex, the same roll is recorded as blocked instead.
+  s.board.robberHex = hex.id;
+  const blocked = rollExactly(s, hex.number);
+  assert.equal(blocked.stats.production[owner][res], 0);
+  assert.equal(blocked.stats.robbed[owner][res], 2);
+  // Older saves gain the new counters on the fly.
+  delete s.stats.production;
+  delete s.stats.robbed;
+  s.board.robberHex = s.board.hexes.find((h) => h.terrain === 'desert').id;
+  const upgraded = rollExactly(s, hex.number);
+  assert.equal(upgraded.stats.production[owner][res], 2);
+});
