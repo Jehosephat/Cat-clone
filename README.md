@@ -53,7 +53,7 @@ Notes:
 - Friendly robber (cannot be placed next to players with 2 or fewer points)
 - Undo window: after most actions the player who acted gets a 4-second undo. Trades with other players, dice rolls, card purchases and steals cannot be undone, and an undo is only possible while nobody else has acted since (bots wait out the window)
 - Local mode only: pass-and-play privacy screen, and a seed for a reproducible board and dice
-- A short "ding" (synthesized, no audio files) whenever it becomes your move, with an on/off toggle in the in-game menu
+- Sound effects (synthesized, no audio files): a "ding" whenever it becomes your move and a "ka-ching" when another player offers you a trade, with an on/off toggle in the in-game menu
 
 ## Project layout
 
@@ -73,7 +73,7 @@ src/undo.js         undo offers after actions (what can be undone, and restoring
 src/ai.js           bot decision making
 src/ui/app.js       screens: home, lobby, game; local and online modes
 src/ui/net.js       WebSocket client with automatic reconnect
-src/ui/sound.js     Web Audio "ding" for your turn
+src/ui/sound.js     Web Audio sound effects (turn ding, trade ka-ching)
 src/ui/             board SVG rendering, dialogs, DOM helper
 test/               node:test suites for the board, rules, engine, bots and multiplayer rooms
 ```

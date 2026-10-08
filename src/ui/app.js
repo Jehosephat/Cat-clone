@@ -38,7 +38,7 @@ import { botAction } from '../ai.js';
 import { createRollOff, addRoll, pendingRollers, isComplete, rollOrder, describeRollOff } from '../rolloff.js';
 import { createRng } from '../rng.js';
 import { makeUndoOffer, restoreFromOffer } from '../undo.js';
-import { ding, primeAudio, soundEnabled, setSoundEnabled, stats as soundStats } from './sound.js';
+import { ding, kaching, primeAudio, soundEnabled, setSoundEnabled, stats as soundStats } from './sound.js';
 import { RESOURCES, RESOURCE_ICON, RESOURCE_LABEL, PLAYER_COLORS, DEFAULT_OPTIONS, COSTS, DEV_CARD_LABEL } from '../constants.js';
 import { longestRoadLength, handSize } from '../rules.js';
 import { createConnection, loadSession, saveSession } from './net.js';
@@ -223,9 +223,11 @@ function setState(next) {
   const prevActor = prevState ? requiredActor() : null;
   state = next;
   if (localUndo && localUndo.result !== next) localUndo = null; // any other change overtakes the offer
-  // Ding when it becomes this device's move: a turn starting, or a prompt such as a discard or trade answer.
+  // Sounds: "ka-ching" when another player's trade offer arrives for someone on this device,
+  // otherwise a ding when it becomes this device's move (a turn starting, or a prompt such as a discard).
   const actor = state.phase === 'ended' ? null : requiredActor();
-  if (actor !== null && actor !== prevActor) ding();
+  if (incomingTradeOffer(prevState)) kaching();
+  else if (actor !== null && actor !== prevActor) ding();
   if (prevState && prevState.turn.player !== state.turn.player) ui.mode = null;
   if (ui.mode && (state.pending || state.phase !== 'main')) ui.mode = null;
   if (prevKey !== contextKey() && currentModalTag() !== 'gameover') closeModal();
@@ -233,6 +235,15 @@ function setState(next) {
   render();
   announceEvents();
   if (!isOnline()) scheduleBots();
+}
+
+/** A trade offer from another player has just appeared, and a human on this device is asked to answer it. */
+function incomingTradeOffer(prevState) {
+  const t = state.pending;
+  if (!t || t.type !== 'trade') return false;
+  if (prevState && prevState.pending && prevState.pending.type === 'trade') return false; // same offer, e.g. a response came in
+  if (isOnline()) return t.from !== mySeat() && mySeat() in t.responses;
+  return Object.keys(t.responses).some((id) => !state.players[id].isBot);
 }
 
 function announceEvents() {
@@ -1145,7 +1156,7 @@ function openFullLog() {
 
 function openMenu() {
   const items = [
-    h('button', { class: 'btn btn-wide', onclick: () => { setSoundEnabled(!soundEnabled()); closeModal(); openMenu(); } }, soundEnabled() ? '🔔 Turn sound: on' : '🔕 Turn sound: off'),
+    h('button', { class: 'btn btn-wide', onclick: () => { setSoundEnabled(!soundEnabled()); closeModal(); openMenu(); } }, soundEnabled() ? '🔔 Sound effects: on' : '🔕 Sound effects: off'),
     h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); costsModal(); } }, '🏗️ Building costs'),
     h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); rulesModal(); } }, '📖 Rules summary'),
     h('button', { class: 'btn btn-wide', onclick: () => { closeModal(); openFullLog(); } }, '📜 Full log'),
